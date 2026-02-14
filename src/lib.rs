@@ -5,7 +5,6 @@ pub mod inspector;
 pub mod ui;
 pub mod utils;
 
-// Re-export commonly used types
 pub use debugger::engine::DebuggerEngine;
 pub use runtime::executor::ContractExecutor;
 
