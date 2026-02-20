@@ -42,7 +42,7 @@ impl DebuggerUI {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    tracing::error!(error = %e, "Command execution error");
                 }
             }
         }
@@ -60,11 +60,11 @@ impl DebuggerUI {
         match parts[0] {
             "s" | "step" => {
                 self.engine.step()?;
-                println!("Stepped");
+                crate::logging::log_step(self.engine.state().step_count() as u64);
             }
             "c" | "continue" => {
                 self.engine.continue_execution()?;
-                println!("Continuing...");
+                tracing::info!("Execution continuing");
             }
             "i" | "inspect" => {
                 self.inspect();
@@ -80,44 +80,40 @@ impl DebuggerUI {
             }
             "break" => {
                 if parts.len() < 2 {
-                    println!("Usage: break <function_name>");
+                    tracing::warn!("breakpoint set without function name");
                 } else {
                     self.engine.breakpoints_mut().add(parts[1]);
-                    println!("Breakpoint set at: {}", parts[1]);
+                    crate::logging::log_breakpoint_set(parts[1]);
                 }
             }
             "list-breaks" => {
                 let breakpoints = self.engine.breakpoints_mut().list();
-                if breakpoints.is_empty() {
-                    println!("No breakpoints set");
-                } else {
-                    println!("Breakpoints:");
+                if !breakpoints.is_empty() {
                     for bp in breakpoints {
-                        println!("  - {}", bp);
+                        tracing::debug!(breakpoint = bp, "Active breakpoint");
                     }
+                } else {
+                    tracing::debug!("No breakpoints currently set");
                 }
             }
             "clear" => {
                 if parts.len() < 2 {
-                    println!("Usage: clear <function_name>");
+                    tracing::warn!("clear command missing function name");
                 } else if self.engine.breakpoints_mut().remove(parts[1]) {
-                    println!("Breakpoint removed: {}", parts[1]);
+                    crate::logging::log_breakpoint_cleared(parts[1]);
                 } else {
-                    println!("No breakpoint at: {}", parts[1]);
+                    tracing::debug!(breakpoint = parts[1], "No breakpoint found at function");
                 }
             }
             "help" => {
                 self.print_help();
             }
             "q" | "quit" | "exit" => {
-                println!("Exiting debugger");
+                tracing::info!("Exiting debugger");
                 return Ok(true);
             }
             _ => {
-                println!(
-                    "Unknown command: {}. Type 'help' for available commands.",
-                    parts[0]
-                );
+                tracing::warn!(command = parts[0], "Unknown command");
             }
         }
 
@@ -126,29 +122,17 @@ impl DebuggerUI {
 
     /// Display current state
     fn inspect(&self) {
-        println!("\n=== Current State ===");
+        let steps = self.engine.state().step_count();
+        let paused = self.engine.is_paused();
         if let Some(func) = self.engine.state().current_function() {
-            println!("Function: {}", func);
+            tracing::info!(function = func, steps = steps, paused = paused, "Current execution state");
         } else {
-            println!("Function: (none)");
+            tracing::info!(steps = steps, paused = paused, "Current execution state");
         }
-        println!("Steps: {}", self.engine.state().step_count());
-        println!("Paused: {}", self.engine.is_paused());
     }
 
     /// Print help message
     fn print_help(&self) {
-        println!("\nAvailable commands:");
-        println!("  s, step              Execute next instruction");
-        println!("  c, continue          Run until breakpoint or completion");
-        println!("  i, inspect           Show current execution state");
-        println!("  storage              Display contract storage");
-        println!("  stack                Show call stack");
-        println!("  budget               Show resource usage (CPU/memory)");
-        println!("  break <function>     Set breakpoint at function");
-        println!("  list-breaks          List all breakpoints");
-        println!("  clear <function>     Remove breakpoint");
-        println!("  help                 Show this help message");
-        println!("  q, quit              Exit debugger");
+        tracing::info!("Interactive debugger commands: step, continue, inspect, storage, stack, budget, break, list-breaks, clear, help, quit");
     }
 }

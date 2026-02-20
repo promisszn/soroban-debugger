@@ -26,18 +26,12 @@ impl CallStackInspector {
     /// Display the call stack
     pub fn display(&self) {
         if self.stack.is_empty() {
-            println!("Call Stack: (empty)");
+            tracing::info!("Call stack is empty");
             return;
         }
 
-        println!("Call Stack:");
         for (i, func) in self.stack.iter().enumerate() {
-            let indent = "  ".repeat(i);
-            if i == self.stack.len() - 1 {
-                println!("{}→ {}", indent, func);
-            } else {
-                println!("{}└─ {}", indent, func);
-            }
+            tracing::debug!(depth = i, function = func, "Call stack frame");
         }
     }
 

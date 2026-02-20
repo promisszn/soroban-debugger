@@ -1,5 +1,6 @@
 use crate::cli::args::{InspectArgs, InteractiveArgs, OptimizeArgs, RunArgs, UpgradeCheckArgs};
 use crate::debugger::engine::DebuggerEngine;
+use crate::logging;
 use crate::repeat::RepeatRunner;
 use crate::runtime::executor::ContractExecutor;
 use crate::simulator::SnapshotLoader;
@@ -7,24 +8,23 @@ use crate::ui::tui::DebuggerUI;
 use crate::Result;
 use anyhow::Context;
 use std::fs;
-use tracing::info as log_info;
 
 /// Execute the run command
 pub fn run(args: RunArgs) -> Result<()> {
-    println!("Loading contract: {:?}", args.contract);
+    logging::log_loading_contract(&args.contract.to_string_lossy());
 
     // Load WASM file
     let wasm_bytes = fs::read(&args.contract)
         .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
 
-    println!("Contract loaded successfully ({} bytes)", wasm_bytes.len());
+    logging::log_contract_loaded(wasm_bytes.len());
 
     // Load network snapshot if provided
     if let Some(snapshot_path) = &args.network_snapshot {
-        println!("\nLoading network snapshot: {:?}", snapshot_path);
+        logging::log_loading_snapshot(&snapshot_path.to_string_lossy());
         let loader = SnapshotLoader::from_file(snapshot_path)?;
         let loaded_snapshot = loader.apply_to_environment()?;
-        println!("{}", loaded_snapshot.format_summary());
+        logging::log_display(loaded_snapshot.format_summary(), logging::LogLevel::Info);
     }
 
     // Parse arguments if provided
@@ -49,11 +49,8 @@ pub fn run(args: RunArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("\nStarting debugger...");
-    println!("Function: {}", args.function);
-    if let Some(ref args) = parsed_args {
-        println!("Arguments: {}", args);
-    }
+    let args_str = parsed_args.as_ref().map(|s| s.as_str());
+    logging::log_execution_start(&args.function, args_str);
 
     // Create executor
     let mut executor = ContractExecutor::new(wasm_bytes)?;
@@ -67,15 +64,11 @@ pub fn run(args: RunArgs) -> Result<()> {
     let mut engine = DebuggerEngine::new(executor, args.breakpoint);
 
     // Execute with debugging
-    println!("\n--- Execution Start ---\n");
     let result = engine.execute(&args.function, parsed_args.as_deref())?;
-    println!("\n--- Execution Complete ---\n");
-
-    println!("Result: {:?}", result);
+    logging::log_execution_complete(&format!("{:?}", result));
 
     // Display events if requested
     if args.show_events {
-        println!("\n--- Events ---");
         let events = engine.executor().get_events()?;
         let filtered_events = if let Some(topic) = &args.filter_topic {
             crate::inspector::events::EventInspector::filter_events(&events, topic)
@@ -83,17 +76,11 @@ pub fn run(args: RunArgs) -> Result<()> {
             events
         };
 
-        if filtered_events.is_empty() {
-            println!("No events captured.");
-        } else {
-            for (i, event) in filtered_events.iter().enumerate() {
-                println!("Event #{}:", i);
+        if !filtered_events.is_empty() {
+            for event in filtered_events.iter() {
                 if let Some(contract_id) = &event.contract_id {
-                    println!("  Contract: {}", contract_id);
+                    logging::log_event_emitted(contract_id, event.topics.len());
                 }
-                println!("  Topics: {:?}", event.topics);
-                println!("  Data: {}", event.data);
-                println!();
             }
         }
     }
@@ -102,7 +89,7 @@ pub fn run(args: RunArgs) -> Result<()> {
     if !args.storage_filter.is_empty() {
         let storage_filter = crate::inspector::storage::StorageFilter::new(&args.storage_filter)
             .map_err(|e| anyhow::anyhow!("Invalid storage filter: {}", e))?;
-        println!("\n--- Storage ---");
+        tracing::info!("Displaying filtered storage");
         let inspector = crate::inspector::StorageInspector::new();
         inspector.display_filtered(&storage_filter);
     }
@@ -112,20 +99,20 @@ pub fn run(args: RunArgs) -> Result<()> {
 
 /// Execute the interactive command
 pub fn interactive(args: InteractiveArgs) -> Result<()> {
-    println!("Starting interactive debugger for: {:?}", args.contract);
+    logging::log_loading_contract(&args.contract.to_string_lossy());
 
     // Load WASM file
     let wasm_bytes = fs::read(&args.contract)
         .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
 
-    println!("Contract loaded successfully ({} bytes)", wasm_bytes.len());
+    logging::log_contract_loaded(wasm_bytes.len());
 
     // Load network snapshot if provided
     if let Some(snapshot_path) = &args.network_snapshot {
-        println!("\nLoading network snapshot: {:?}", snapshot_path);
+        logging::log_loading_snapshot(&snapshot_path.to_string_lossy());
         let loader = SnapshotLoader::from_file(snapshot_path)?;
         let loaded_snapshot = loader.apply_to_environment()?;
-        println!("{}", loaded_snapshot.format_summary());
+        logging::log_display(loaded_snapshot.format_summary(), logging::LogLevel::Info);
     }
 
     // Create executor
@@ -135,8 +122,7 @@ pub fn interactive(args: InteractiveArgs) -> Result<()> {
     let engine = DebuggerEngine::new(executor, vec![]);
 
     // Start interactive UI
-    println!("\nStarting interactive mode...");
-    println!("Type 'help' for available commands\n");
+    logging::log_interactive_mode_start();
 
     let mut ui = DebuggerUI::new(engine)?;
     ui.run()?;
@@ -146,26 +132,21 @@ pub fn interactive(args: InteractiveArgs) -> Result<()> {
 
 /// Execute the inspect command
 pub fn inspect(args: InspectArgs) -> Result<()> {
-    println!("Inspecting contract: {:?}", args.contract);
+    logging::log_loading_contract(&args.contract.to_string_lossy());
 
     // Load WASM file
     let wasm_bytes = fs::read(&args.contract)
         .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
 
-    println!("\nContract Information:");
-    println!("  Size: {} bytes", wasm_bytes.len());
+    logging::log_contract_loaded(wasm_bytes.len());
 
     if args.functions {
-        println!("\nExported Functions:");
         let functions = crate::utils::wasm::parse_functions(&wasm_bytes)?;
-        for func in functions {
-            println!("  - {}", func);
-        }
+        tracing::info!(count = functions.len(), "Exported functions found");
     }
 
     if args.metadata {
-        println!("\nMetadata:");
-        println!("  (Metadata parsing not yet implemented)");
+        tracing::debug!("Metadata parsing not yet implemented");
     }
 
     Ok(())
@@ -180,13 +161,13 @@ pub fn parse_args(json: &str) -> Result<String> {
     // Provide helpful context about what was parsed
     match value {
         serde_json::Value::Array(ref arr) => {
-            log_info!("Parsed {} argument(s)", arr.len());
+            tracing::debug!(count = arr.len(), "Parsed array arguments");
         }
         serde_json::Value::Object(ref obj) => {
-            log_info!("Parsed object with {} fields for Map argument", obj.len());
+            tracing::debug!(fields = obj.len(), "Parsed object arguments");
         }
         _ => {
-            log_info!("Parsed single value argument");
+            tracing::debug!("Parsed single value argument");
         }
     }
 
@@ -203,26 +184,22 @@ pub fn parse_storage(json: &str) -> Result<String> {
 
 /// Execute the optimize command
 pub fn optimize(args: OptimizeArgs) -> Result<()> {
-    println!(
-        "Analyzing contract for gas optimization: {:?}",
-        args.contract
-    );
+    logging::log_loading_contract(&args.contract.to_string_lossy());
 
     let wasm_bytes = fs::read(&args.contract)
         .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
 
-    println!("Contract loaded successfully ({} bytes)", wasm_bytes.len());
+    logging::log_contract_loaded(wasm_bytes.len());
 
     // Load network snapshot if provided
     if let Some(snapshot_path) = &args.network_snapshot {
-        println!("\nLoading network snapshot: {:?}", snapshot_path);
+        logging::log_loading_snapshot(&snapshot_path.to_string_lossy());
         let loader = SnapshotLoader::from_file(snapshot_path)?;
         let loaded_snapshot = loader.apply_to_environment()?;
-        println!("{}", loaded_snapshot.format_summary());
+        logging::log_display(loaded_snapshot.format_summary(), logging::LogLevel::Info);
     }
 
     let functions_to_analyze = if args.function.is_empty() {
-        println!("No functions specified, analyzing all exported functions...");
         crate::utils::wasm::parse_functions(&wasm_bytes)?
     } else {
         args.function.clone()
@@ -237,22 +214,15 @@ pub fn optimize(args: OptimizeArgs) -> Result<()> {
 
     let mut optimizer = crate::profiler::analyzer::GasOptimizer::new(executor);
 
-    println!("\nAnalyzing {} function(s)...", functions_to_analyze.len());
+    logging::log_analysis_start(&format!("gas optimization for {} functions", functions_to_analyze.len()));
 
     for function_name in &functions_to_analyze {
-        println!("  Analyzing function: {}", function_name);
         match optimizer.analyze_function(function_name, args.args.as_deref()) {
             Ok(profile) => {
-                println!(
-                    "    CPU: {} instructions, Memory: {} bytes",
-                    profile.total_cpu, profile.total_memory
-                );
+                tracing::debug!(function = function_name, cpu = profile.total_cpu, memory = profile.total_memory, "Function analyzed");
             }
             Err(e) => {
-                eprintln!(
-                    "    Warning: Failed to analyze function {}: {}",
-                    function_name, e
-                );
+                tracing::warn!(function = function_name, error = %e, "Failed to analyze function");
             }
         }
     }
@@ -265,9 +235,9 @@ pub fn optimize(args: OptimizeArgs) -> Result<()> {
     if let Some(output_path) = &args.output {
         fs::write(output_path, &markdown)
             .with_context(|| format!("Failed to write report to: {:?}", output_path))?;
-        println!("\nOptimization report written to: {:?}", output_path);
+        logging::log_optimization_report(&output_path.to_string_lossy());
     } else {
-        println!("\n{}", markdown);
+        logging::log_display(&markdown, logging::LogLevel::Info);
     }
 
     Ok(())
@@ -275,24 +245,21 @@ pub fn optimize(args: OptimizeArgs) -> Result<()> {
 
 /// Execute the upgrade-check command
 pub fn upgrade_check(args: UpgradeCheckArgs) -> Result<()> {
-    println!("Comparing contracts...");
-    println!("  Old: {:?}", args.old);
-    println!("  New: {:?}", args.new);
+    logging::log_contract_comparison(
+        &args.old.to_string_lossy(),
+        &args.new.to_string_lossy()
+    );
 
     let old_bytes = fs::read(&args.old)
         .with_context(|| format!("Failed to read old WASM file: {:?}", args.old))?;
     let new_bytes = fs::read(&args.new)
         .with_context(|| format!("Failed to read new WASM file: {:?}", args.new))?;
 
-    println!(
-        "Loaded contracts (Old: {} bytes, New: {} bytes)",
-        old_bytes.len(),
-        new_bytes.len()
-    );
+    tracing::info!(old_size = old_bytes.len(), new_size = new_bytes.len(), "Loaded contracts for comparison");
 
     let analyzer = crate::analyzer::upgrade::UpgradeAnalyzer::new();
 
-    println!("Running analysis...");
+    logging::log_analysis_start("contract upgrade compatibility check");
     let report = analyzer.analyze(
         &old_bytes,
         &new_bytes,
@@ -305,9 +272,9 @@ pub fn upgrade_check(args: UpgradeCheckArgs) -> Result<()> {
     if let Some(output_path) = &args.output {
         fs::write(output_path, &markdown)
             .with_context(|| format!("Failed to write report to: {:?}", output_path))?;
-        println!("\nCompatibility report written to: {:?}", output_path);
+        logging::log_optimization_report(&output_path.to_string_lossy());
     } else {
-        println!("\n{}", markdown);
+        logging::log_display(&markdown, logging::LogLevel::Info);
     }
 
     Ok(())
