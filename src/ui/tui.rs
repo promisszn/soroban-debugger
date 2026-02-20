@@ -127,12 +127,17 @@ impl DebuggerUI {
     /// Display current state
     fn inspect(&self) {
         println!("\n=== Current State ===");
-        if let Some(func) = self.engine.state().current_function() {
-            println!("Function: {}", func);
+        if let Ok(state) = self.engine.state().lock() {
+            if let Some(func) = state.current_function() {
+                println!("Function: {}", func);
+            } else {
+                println!("Function: (none)");
+            }
+            println!("Steps: {}", state.step_count());
         } else {
-            println!("Function: (none)");
+            println!("Function: (unavailable)");
+            println!("Steps: (unavailable)");
         }
-        println!("Steps: {}", self.engine.state().step_count());
         println!("Paused: {}", self.engine.is_paused());
     }
 

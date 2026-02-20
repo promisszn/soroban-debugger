@@ -1,9 +1,11 @@
 use crate::cli::args::{InspectArgs, InteractiveArgs, OptimizeArgs, RunArgs, UpgradeCheckArgs};
 use crate::debugger::engine::DebuggerEngine;
+use crate::debugger::instruction_pointer::StepMode;
 use crate::repeat::RepeatRunner;
 use crate::runtime::executor::ContractExecutor;
 use crate::simulator::SnapshotLoader;
 use crate::ui::tui::DebuggerUI;
+use crate::ui::formatter::Formatter;
 use crate::Result;
 use anyhow::Context;
 use std::fs;
@@ -56,7 +58,7 @@ pub fn run(args: RunArgs) -> Result<()> {
     }
 
     // Create executor
-    let mut executor = ContractExecutor::new(wasm_bytes)?;
+    let mut executor = ContractExecutor::new(wasm_bytes.clone())?;
 
     // Set up initial storage if provided
     if let Some(storage) = initial_storage {
@@ -65,6 +67,34 @@ pub fn run(args: RunArgs) -> Result<()> {
 
     // Create debugger engine
     let mut engine = DebuggerEngine::new(executor, args.breakpoint);
+
+    // Enable instruction-level debugging if requested
+    if args.instruction_debug {
+        println!("Enabling instruction-level debugging...");
+        engine.enable_instruction_debug(&wasm_bytes)?;
+        
+        // Parse step mode
+        let step_mode = match args.step_mode.to_lowercase().as_str() {
+            "into" => StepMode::StepInto,
+            "over" => StepMode::StepOver,
+            "out" => StepMode::StepOut,
+            "block" => StepMode::StepBlock,
+            _ => {
+                println!("Warning: Invalid step mode '{}', using 'into'", args.step_mode);
+                StepMode::StepInto
+            }
+        };
+
+        // Start instruction stepping if requested
+        if args.step_instructions {
+            println!("Starting instruction stepping in {} mode", args.step_mode);
+            engine.start_instruction_stepping(step_mode)?;
+            
+            // Enter instruction stepping mode
+            run_instruction_stepping(&mut engine, &args.function, parsed_args.as_deref())?;
+            return Ok(());
+        }
+    }
 
     // Execute with debugging
     println!("\n--- Execution Start ---\n");
@@ -311,4 +341,188 @@ pub fn upgrade_check(args: UpgradeCheckArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Run instruction-level stepping mode
+fn run_instruction_stepping(
+    engine: &mut DebuggerEngine,
+    function: &str,
+    args: Option<&str>,
+) -> Result<()> {
+    println!("\n=== Instruction Stepping Mode ===");
+    println!("Type 'help' for available commands\n");
+
+    // Display initial instruction context
+    display_instruction_context(engine, 3);
+
+    loop {
+        print!("(step) > ");
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).unwrap();
+        let input = input.trim().to_lowercase();
+
+        match input.as_str() {
+            "n" | "next" => {
+                if let Ok(stepped) = engine.step_into() {
+                    if stepped {
+                        println!("Stepped to next instruction");
+                        display_instruction_context(engine, 3);
+                    } else {
+                        println!("Cannot step: execution finished or error occurred");
+                    }
+                } else {
+                    println!("Error stepping: instruction debugging not enabled");
+                }
+            }
+            "s" | "step" | "into" => {
+                if let Ok(stepped) = engine.step_into() {
+                    if stepped {
+                        println!("Stepped into next instruction");
+                        display_instruction_context(engine, 3);
+                    } else {
+                        println!("Cannot step into: execution finished or error occurred");
+                    }
+                } else {
+                    println!("Error stepping: instruction debugging not enabled");
+                }
+            }
+            "o" | "over" => {
+                if let Ok(stepped) = engine.step_over() {
+                    if stepped {
+                        println!("Stepped over instruction");
+                        display_instruction_context(engine, 3);
+                    } else {
+                        println!("Cannot step over: execution finished or error occurred");
+                    }
+                } else {
+                    println!("Error stepping: instruction debugging not enabled");
+                }
+            }
+            "u" | "out" => {
+                if let Ok(stepped) = engine.step_out() {
+                    if stepped {
+                        println!("Stepped out of function");
+                        display_instruction_context(engine, 3);
+                    } else {
+                        println!("Cannot step out: execution finished or error occurred");
+                    }
+                } else {
+                    println!("Error stepping: instruction debugging not enabled");
+                }
+            }
+            "b" | "block" => {
+                if let Ok(stepped) = engine.step_block() {
+                    if stepped {
+                        println!("Stepped to next basic block");
+                        display_instruction_context(engine, 3);
+                    } else {
+                        println!("Cannot step to next block: execution finished or error occurred");
+                    }
+                } else {
+                    println!("Error stepping: instruction debugging not enabled");
+                }
+            }
+            "p" | "prev" | "back" => {
+                if let Ok(stepped) = engine.step_back() {
+                    if stepped {
+                        println!("Stepped back to previous instruction");
+                        display_instruction_context(engine, 3);
+                    } else {
+                        println!("Cannot step back: no previous instruction");
+                    }
+                } else {
+                    println!("Error stepping: instruction debugging not enabled");
+                }
+            }
+            "c" | "continue" => {
+                println!("Continuing execution...");
+                engine.continue_execution()?;
+                
+                // Execute the function
+                let result = engine.execute(function, args)?;
+                println!("Execution completed. Result: {:?}", result);
+                break;
+            }
+            "i" | "info" => {
+                display_instruction_info(engine);
+            }
+            "ctx" | "context" => {
+                print!("Enter context size (default 5): ");
+                std::io::Write::flush(&mut std::io::stdout()).unwrap();
+                let mut size_input = String::new();
+                std::io::stdin().read_line(&mut size_input).unwrap();
+                let size = size_input.trim().parse().unwrap_or(5);
+                display_instruction_context(engine, size);
+            }
+            "h" | "help" => {
+                println!("{}", Formatter::format_stepping_help());
+            }
+            "q" | "quit" | "exit" => {
+                println!("Exiting instruction stepping mode...");
+                break;
+            }
+            "" => {
+                // Repeat last command (step into)
+                if let Ok(stepped) = engine.step_into() {
+                    if stepped {
+                        println!("Stepped to next instruction");
+                        display_instruction_context(engine, 3);
+                    } else {
+                        println!("Cannot step: execution finished or error occurred");
+                    }
+                } else {
+                    println!("Error stepping: instruction debugging not enabled");
+                }
+            }
+            _ => {
+                println!("Unknown command: {}. Type 'help' for available commands.", input);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Display instruction context around current position
+fn display_instruction_context(engine: &DebuggerEngine, context_size: usize) {
+    let context = engine.get_instruction_context(context_size);
+    let formatted = Formatter::format_instruction_context(&context, context_size);
+    println!("{}", formatted);
+}
+
+/// Display detailed instruction information
+fn display_instruction_info(engine: &DebuggerEngine) {
+    if let Some(state) = engine.state().lock().ok() {
+        let ip = state.instruction_pointer();
+        let step_mode = if ip.is_stepping() { Some(ip.step_mode()) } else { None };
+        
+        println!("{}", Formatter::format_instruction_pointer_state(
+            ip.current_index(),
+            ip.call_stack_depth(),
+            step_mode,
+            ip.is_stepping(),
+        ));
+
+        let stats = Formatter::format_instruction_stats(
+            state.instructions().len(),
+            ip.current_index(),
+            state.step_count(),
+        );
+        println!("{}", stats);
+
+        if let Some(current_inst) = state.current_instruction() {
+            println!("Current Instruction Details:");
+            println!("  Name: {}", current_inst.name());
+            println!("  Offset: 0x{:08x}", current_inst.offset);
+            println!("  Function: {}", current_inst.function_index);
+            println!("  Local Index: {}", current_inst.local_index);
+            println!("  Operands: {}", current_inst.operands());
+            println!("  Control Flow: {}", current_inst.is_control_flow());
+            println!("  Function Call: {}", current_inst.is_call());
+        }
+    } else {
+        println!("Cannot access debug state");
+    }
 }
