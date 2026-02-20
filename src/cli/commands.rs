@@ -1,3 +1,4 @@
+use crate::cli::args::{InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RunArgs};
 use crate::cli::args::{
     CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, RunArgs, UpgradeCheckArgs, Verbosity,
 };
@@ -383,6 +384,9 @@ pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
     Ok(())
 }
 
+/// Execute the optimize command
+pub fn optimize(args: OptimizeArgs) -> Result<()> {
+    println!(
 /// Parse JSON arguments with validation.
 pub fn parse_args(json: &str) -> Result<String> {
     let value = serde_json::from_str::<serde_json::Value>(json)
@@ -460,6 +464,10 @@ pub fn optimize(args: OptimizeArgs, _verbosity: Verbosity) -> Result<()> {
         print_info(format!("  Analyzing function: {}", function_name));
         match optimizer.analyze_function(function_name, args.args.as_deref()) {
             Ok(profile) => {
+                println!(
+                    "    CPU: {} instructions, Memory: {} bytes, Time: {} ms",
+                    profile.total_cpu, profile.total_memory, profile.wall_time_ms
+                );
                 print_success(format!(
                     "    CPU: {} instructions, Memory: {} bytes",
                     profile.total_cpu, profile.total_memory
@@ -495,6 +503,57 @@ pub fn optimize(args: OptimizeArgs, _verbosity: Verbosity) -> Result<()> {
     Ok(())
 }
 
+/// ✅ Execute the profile command (hotspots + suggestions)
+pub fn profile(args: ProfileArgs) -> Result<()> {
+    println!("Profiling contract execution: {:?}", args.contract);
+
+    // Load WASM file
+    let wasm_bytes = fs::read(&args.contract)
+        .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
+
+    println!("Contract loaded successfully ({} bytes)", wasm_bytes.len());
+
+    // Parse args (optional)
+    let parsed_args = if let Some(args_json) = &args.args {
+        Some(parse_args(args_json)?)
+    } else {
+        None
+    };
+
+    // Create executor
+    let mut executor = ContractExecutor::new(wasm_bytes)?;
+
+    // Initial storage (optional)
+    if let Some(storage_json) = &args.storage {
+        let storage = parse_storage(storage_json)?;
+        executor.set_initial_storage(storage)?;
+    }
+
+    // Analyze exactly one function (this command focuses on execution hotspots)
+    let mut optimizer = crate::profiler::analyzer::GasOptimizer::new(executor);
+
+    println!("\nRunning function: {}", args.function);
+    if let Some(ref a) = parsed_args {
+        println!("Args: {}", a);
+    }
+
+    let _profile = optimizer.analyze_function(&args.function, parsed_args.as_deref())?;
+
+    let contract_path_str = args.contract.to_string_lossy().to_string();
+    let report = optimizer.generate_report(&contract_path_str);
+
+    // Hotspot summary first
+    println!("\n{}", report.format_hotspots());
+
+    // Then detailed suggestions (markdown format)
+    let markdown = optimizer.generate_markdown_report(&report);
+
+    if let Some(output_path) = &args.output {
+        fs::write(output_path, &markdown)
+            .with_context(|| format!("Failed to write report to: {:?}", output_path))?;
+        println!("\nProfile report written to: {:?}", output_path);
+    } else {
+        println!("\n{}", markdown);
 /// Execute the upgrade-check command.
 pub fn upgrade_check(args: UpgradeCheckArgs, _verbosity: Verbosity) -> Result<()> {
     print_info("Comparing contracts...");
@@ -664,6 +723,21 @@ fn run_instruction_stepping(
     Ok(())
 }
 
+/// Parse JSON arguments into a string for now (will be improved later)
+fn parse_args(json: &str) -> Result<String> {
+    // Basic validation
+    serde_json::from_str::<serde_json::Value>(json)
+        .with_context(|| format!("Invalid JSON arguments: {}", json))?;
+    Ok(json.to_string())
+}
+
+/// Parse JSON storage into a string for now (will be improved later)
+fn parse_storage(json: &str) -> Result<String> {
+    // Basic validation
+    serde_json::from_str::<serde_json::Value>(json)
+        .with_context(|| format!("Invalid JSON storage: {}", json))?;
+    Ok(json.to_string())
+}
 fn display_instruction_context(engine: &DebuggerEngine, context_size: usize) {
     let context = engine.get_instruction_context(context_size);
     let formatted = Formatter::format_instruction_context(&context, context_size);

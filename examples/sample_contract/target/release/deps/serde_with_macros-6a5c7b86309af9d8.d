@@ -1,0 +1,8 @@
+C:\Users\Administrator\desktop\soroban-debugger\examples\sample_contract\target\release\deps\serde_with_macros-6a5c7b86309af9d8.d: C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_with_macros-3.16.1\src\lib.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_with_macros-3.16.1\src\apply.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_with_macros-3.16.1\src\lazy_bool.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_with_macros-3.16.1\src\utils.rs
+
+C:\Users\Administrator\desktop\soroban-debugger\examples\sample_contract\target\release\deps\serde_with_macros-6a5c7b86309af9d8.dll: C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_with_macros-3.16.1\src\lib.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_with_macros-3.16.1\src\apply.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_with_macros-3.16.1\src\lazy_bool.rs C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_with_macros-3.16.1\src\utils.rs
+
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_with_macros-3.16.1\src\lib.rs:
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_with_macros-3.16.1\src\apply.rs:
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_with_macros-3.16.1\src\lazy_bool.rs:
+C:\Users\Administrator\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_with_macros-3.16.1\src\utils.rs:
