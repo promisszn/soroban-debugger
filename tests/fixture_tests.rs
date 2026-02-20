@@ -1,6 +1,5 @@
 //! Tests that demonstrate usage of test fixture contracts
 
-use predicates::prelude::*;
 use soroban_debugger::utils::wasm;
 use std::fs;
 
@@ -106,7 +105,6 @@ fn test_fixture_metadata_extraction() {
 #[test]
 fn test_fixture_inspect_command() {
     use assert_cmd::Command;
-    use tempfile::NamedTempFile;
 
     let fixture_path = get_fixture_path("counter");
 

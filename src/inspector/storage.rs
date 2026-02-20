@@ -141,7 +141,12 @@ impl StorageInspector {
         }
 
         let total = self.storage.len();
-        tracing::info!(matched = matched, total = total, filter = filter.summary(), "Storage filtering complete");
+        tracing::info!(
+            matched = matched,
+            total = total,
+            filter = filter.summary(),
+            "Storage filtering complete"
+        );
     }
 
     /// Get filtered storage entries as a new HashMap

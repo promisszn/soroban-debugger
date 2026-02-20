@@ -69,7 +69,7 @@ impl DebuggerEngine {
     fn update_call_stack(&mut self, total_duration: std::time::Duration) -> Result<()> {
         let events = self.executor.get_diagnostic_events()?;
         let current_func = self.state.current_function().unwrap_or("entry").to_string();
-        
+
         let stack = self.state.call_stack_mut();
         stack.clear();
 
@@ -80,9 +80,11 @@ impl DebuggerEngine {
             // We use the debug string to identify call/return events for now
             // as specific diagnostic event schemas can vary between host versions.
             let event_str = format!("{:?}", event);
-            
+
             // Look for patterns indicating a contract invocation
-            if event_str.contains("ContractCall") || (event_str.contains("call") && event.contract_id.is_some()) {
+            if event_str.contains("ContractCall")
+                || (event_str.contains("call") && event.contract_id.is_some())
+            {
                 let contract_id = event.contract_id.as_ref().map(|cid| format!("{:?}", cid));
                 // Note: Function name extraction from diagnostic events can be complex;
                 // for this tracking phase, we identify cross-contract call boundaries.

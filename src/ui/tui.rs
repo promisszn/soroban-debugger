@@ -123,7 +123,12 @@ impl DebuggerUI {
         let steps = self.engine.state().step_count();
         let paused = self.engine.is_paused();
         if let Some(func) = self.engine.state().current_function() {
-            tracing::info!(function = func, steps = steps, paused = paused, "Current execution state");
+            tracing::info!(
+                function = func,
+                steps = steps,
+                paused = paused,
+                "Current execution state"
+            );
         } else {
             tracing::info!(steps = steps, paused = paused, "Current execution state");
         }

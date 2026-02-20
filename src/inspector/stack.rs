@@ -66,9 +66,15 @@ impl CallStackInspector {
             };
 
             if i == self.stack.len() - 1 {
-                println!("{}→ {}{}{}", indent, frame.function, contract_ctx, duration_ctx);
+                println!(
+                    "{}→ {}{}{}",
+                    indent, frame.function, contract_ctx, duration_ctx
+                );
             } else {
-                println!("{}└─ {}{}{}", indent, frame.function, contract_ctx, duration_ctx);
+                println!(
+                    "{}└─ {}{}{}",
+                    indent, frame.function, contract_ctx, duration_ctx
+                );
             }
         }
     }
@@ -78,4 +84,3 @@ impl CallStackInspector {
         self.stack.clear();
     }
 }
-

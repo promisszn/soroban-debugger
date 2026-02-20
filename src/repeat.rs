@@ -106,7 +106,7 @@ impl AggregateStats {
     /// Pretty-print the aggregate stats to stdout.
     pub fn display(&self) {
         let n = self.runs.len();
-        
+
         // Log aggregate statistics with structured fields
         tracing::info!(
             runs = n,
@@ -122,7 +122,7 @@ impl AggregateStats {
             inconsistent = self.inconsistent_results,
             "Repeat run summary"
         );
-        
+
         // Log individual inconsistent results if any
         if self.inconsistent_results {
             let first = &self.runs[0].result;
@@ -177,7 +177,11 @@ impl RepeatRunner {
         let mut all_runs = Vec::with_capacity(n as usize);
 
         for i in 1..=n {
-            tracing::debug!(iteration = i, total = n, "Starting repeat execution iteration");
+            tracing::debug!(
+                iteration = i,
+                total = n,
+                "Starting repeat execution iteration"
+            );
 
             // Fresh executor and engine per run for isolation
             let mut executor = ContractExecutor::new(self.wasm_bytes.clone())?;

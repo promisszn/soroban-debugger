@@ -1,5 +1,5 @@
 //! Structured logging utilities for the Soroban debugger.
-//! 
+//!
 //! This module provides helper functions and macros for consistent,
 //! structured logging across the application using the `tracing` crate.
 
@@ -67,7 +67,11 @@ pub fn log_storage_access(key_count: usize) {
 
 /// Log event emission.
 pub fn log_event_emitted(contract_id: &str, topic_count: usize) {
-    tracing::debug!(contract = contract_id, topics = topic_count, "Event emitted");
+    tracing::debug!(
+        contract = contract_id,
+        topics = topic_count,
+        "Event emitted"
+    );
 }
 
 /// Log budget usage.
