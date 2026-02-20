@@ -165,7 +165,30 @@ pub fn inspect(args: InspectArgs) -> Result<()> {
 
     if args.metadata {
         println!("\nMetadata:");
-        println!("  (Metadata parsing not yet implemented)");
+        let metadata = crate::utils::wasm::extract_contract_metadata(&wasm_bytes)?;
+
+        if metadata.is_empty() {
+            println!("  (No embedded metadata found)");
+        } else {
+            if let Some(version) = metadata.contract_version {
+                println!("  Contract version      : {}", version);
+            }
+            if let Some(sdk) = metadata.sdk_version {
+                println!("  Soroban SDK version   : {}", sdk);
+            }
+            if let Some(build_date) = metadata.build_date {
+                println!("  Build date            : {}", build_date);
+            }
+            if let Some(author) = metadata.author {
+                println!("  Author / organization : {}", author);
+            }
+            if let Some(desc) = metadata.description {
+                println!("  Description           : {}", desc);
+            }
+            if let Some(impl_notes) = metadata.implementation {
+                println!("  Implementation notes  : {}", impl_notes);
+            }
+        }
     }
 
     Ok(())
