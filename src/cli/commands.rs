@@ -626,6 +626,7 @@ pub fn profile(args: ProfileArgs) -> Result<()> {
 
     Ok(())
 }
+
 /// Execute the upgrade-check command.
 pub fn upgrade_check(args: UpgradeCheckArgs, _verbosity: Verbosity) -> Result<()> {
     print_info("Comparing contracts...");

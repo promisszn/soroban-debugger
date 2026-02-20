@@ -31,6 +31,23 @@ cargo install --path .
 cargo install soroban-debugger
 ```
 
+### Man Page
+
+A Unix man page is automatically generated for the CLI and all subcommands during the build process. To install them:
+
+```bash
+# After building from source
+sudo cp man/man1/soroban-debug* /usr/local/share/man/man1/
+```
+
+Once installed, you can access the documentation using:
+
+```bash
+man soroban-debug
+# For subcommands:
+man soroban-debug-run
+```
+
 ## Quick Start
 
 ### Basic Usage

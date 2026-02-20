@@ -3,6 +3,7 @@ use std::fs;
 use tempfile::TempDir;
 
 /// Create a simple test contract that adds two numbers
+#[allow(dead_code)]
 fn create_test_contract() -> Vec<u8> {
     // This would be a real WASM contract in production
     // For now, we'll use a placeholder
