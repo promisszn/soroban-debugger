@@ -102,7 +102,6 @@ impl GasOptimizer {
             self.executor.execute(function_name, args)
         }));
 
-
         // Always finish the session so we still capture metrics up to failure.
         let metrics = session.finish();
         let total_cpu = metrics.cpu_instructions;

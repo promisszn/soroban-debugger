@@ -3,7 +3,6 @@ use crate::utils::ArgumentParser;
 use crate::{runtime::mocking::MockCallLogEntry, runtime::mocking::MockContractDispatcher};
 use crate::{DebuggerError, Result};
 
-
 use soroban_env_host::{DiagnosticLevel, Host};
 use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
 use soroban_sdk::{IntoVal, String as SorobanString};
