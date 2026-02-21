@@ -53,6 +53,10 @@ pub struct Cli {
     /// Show detailed version information
     #[arg(long)]
     pub version_verbose: bool,
+
+    /// Show exported functions for a given contract (shorthand for inspect --functions)
+    #[arg(long)]
+    pub list_functions: Option<PathBuf>,
 }
 impl Cli {
     /// Get the effective verbosity level
@@ -198,9 +202,25 @@ pub struct RunArgs {
     /// Import storage state from JSON file before execution
     #[arg(long)]
     pub import_storage: Option<PathBuf>,
+
     /// Path to JSON file containing array of argument sets for batch execution
     #[arg(long)]
     pub batch_args: Option<PathBuf>,
+
+    /// Watch the WASM file for changes and automatically re-run
+    #[arg(long)]
+    pub watch: bool,
+    /// Execution timeout in seconds (default: 30)
+    #[arg(long, default_value = "30")]
+    pub timeout: u64,
+
+    /// Trigger a prominent alert when a critical storage key is modified (repeatable)
+    #[arg(long, value_name = "KEY_PATTERN")]
+    pub alert_on_change: Vec<String>,
+
+    /// Expected SHA-256 hash of the WASM file
+    #[arg(long)]
+    pub expected_hash: Option<String>,
 }
 
 impl RunArgs {
@@ -357,7 +377,6 @@ pub struct CompletionsArgs {
     pub shell: Shell,
 }
 
-
 /// Arguments for the TUI dashboard subcommand
 #[derive(Parser)]
 pub struct TuiArgs {
@@ -431,4 +450,3 @@ pub struct SymbolicArgs {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 }
-

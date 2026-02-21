@@ -252,10 +252,8 @@ impl DashboardApp {
         let cpu_pct = new_budget.cpu_percentage();
         let mem_pct = new_budget.memory_percentage();
 
-        if cpu_pct != self.budget_info.cpu_percentage() {
-            if cpu_pct > 80.0 {
-                self.push_log(LogLevel::Warn, format!("CPU usage high: {:.1}%", cpu_pct));
-            }
+        if cpu_pct != self.budget_info.cpu_percentage() && cpu_pct > 80.0 {
+            self.push_log(LogLevel::Warn, format!("CPU usage high: {:.1}%", cpu_pct));
         }
         self.budget_info = new_budget;
 
@@ -926,7 +924,7 @@ fn render_budget(f: &mut Frame, app: &DashboardApp, area: Rect) {
         let cpu_spark = build_sparkline(&app.budget_history_cpu, "CPU trend: ", COLOR_CPU_FILL);
         let mem_spark = build_sparkline(&app.budget_history_mem, "MEM trend: ", COLOR_MEM_FILL);
 
-        if sparkline_row.len() > 0 {
+        if !sparkline_row.is_empty() {
             f.render_widget(Paragraph::new(cpu_spark), sparkline_row[0]);
         }
         if sparkline_row.len() > 1 {

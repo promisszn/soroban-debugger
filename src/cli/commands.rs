@@ -1,6 +1,6 @@
 use crate::cli::args::{
-    CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RunArgs, TuiArgs,
-    UpgradeCheckArgs, Verbosity, SymbolicArgs,
+    CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RunArgs, SymbolicArgs,
+    TuiArgs, UpgradeCheckArgs, Verbosity,
 };
 use crate::debugger::engine::DebuggerEngine;
 use crate::debugger::instruction_pointer::StepMode;
@@ -13,7 +13,10 @@ use crate::ui::formatter::Formatter;
 use crate::ui::tui::DebuggerUI;
 use crate::Result;
 use anyhow::Context;
+use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::fs;
+use std::sync::mpsc;
+use std::time::Duration;
 use textplots::{Chart, Plot, Shape};
 
 fn print_info(message: impl AsRef<str>) {
@@ -26,6 +29,179 @@ fn print_success(message: impl AsRef<str>) {
 
 fn print_warning(message: impl AsRef<str>) {
     println!("{}", Formatter::warning(message));
+}
+
+/// Execute watch mode: monitor WASM file and re-run on changes
+fn run_watch_mode(args: RunArgs) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    print_info(format!("Starting watch mode for: {:?}", args.contract));
+    print_info("Press Ctrl+C to exit");
+
+    // Canonicalize the path to ensure we're watching the right file
+    let watch_path = args
+        .contract
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve contract path: {:?}", args.contract))?;
+
+    // Set up Ctrl+C handler
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    })
+    .context("Failed to set Ctrl+C handler")?;
+
+    // Create a channel for file system events
+    let (tx, rx) = mpsc::channel();
+
+    // Create a debouncer to avoid repeated triggers
+    let mut last_run = std::time::Instant::now();
+    let debounce_duration = Duration::from_millis(500);
+
+    // Set up file watcher
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
+        if let Ok(event) = res {
+            // Only trigger on modify events
+            if matches!(event.kind, EventKind::Modify(_)) {
+                let _ = tx.send(());
+            }
+        }
+    })
+    .context("Failed to create file watcher")?;
+
+    // Watch the parent directory (watching a file directly doesn't work reliably)
+    let watch_dir = watch_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Contract file has no parent directory"))?;
+
+    watcher
+        .watch(watch_dir, RecursiveMode::NonRecursive)
+        .with_context(|| format!("Failed to watch directory: {:?}", watch_dir))?;
+
+    // Run once immediately
+    print_info("\n--- Initial Run ---\n");
+    if let Err(e) = run_once(&args) {
+        print_warning(format!("Execution failed: {}", e));
+    }
+
+    // Watch loop
+    while running.load(Ordering::SeqCst) {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(()) => {
+                // Debounce: only run if enough time has passed
+                let now = std::time::Instant::now();
+                if now.duration_since(last_run) < debounce_duration {
+                    continue;
+                }
+                last_run = now;
+
+                // Check if the specific file we're watching was modified
+                if !watch_path.exists() {
+                    print_warning("Contract file no longer exists, waiting...");
+                    continue;
+                }
+
+                // Clear terminal for clean output
+                clear_terminal();
+
+                print_info(format!("File changed: {:?}", args.contract));
+                print_info("Re-running...\n");
+
+                // Re-run the contract
+                if let Err(e) = run_once(&args) {
+                    print_warning(format!("Execution failed: {}", e));
+                    print_info("\nWaiting for changes...");
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Normal timeout, continue loop
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // Watcher disconnected, exit
+                break;
+            }
+        }
+    }
+
+    print_info("\nWatch mode exited cleanly");
+    Ok(())
+}
+
+/// Execute a single run of the contract (used by watch mode)
+fn run_once(args: &RunArgs) -> Result<()> {
+    let wasm_bytes = fs::read(&args.contract)
+        .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
+
+    if let Some(snapshot_path) = &args.network_snapshot {
+        let loader = SnapshotLoader::from_file(snapshot_path)?;
+        loader.apply_to_environment()?;
+    }
+
+    let parsed_args = if let Some(args_json) = &args.args {
+        Some(parse_args(args_json)?)
+    } else {
+        None
+    };
+
+    let mut initial_storage = if let Some(storage_json) = &args.storage {
+        Some(parse_storage(storage_json)?)
+    } else {
+        None
+    };
+
+    if let Some(import_path) = &args.import_storage {
+        let imported = crate::inspector::storage::StorageState::import_from_file(import_path)?;
+        initial_storage = Some(serde_json::to_string(&imported)?);
+    }
+
+    let mut executor = ContractExecutor::new(wasm_bytes.clone())?;
+    if let Some(storage) = initial_storage {
+        executor.set_initial_storage(storage)?;
+    }
+    if !args.mock.is_empty() {
+        executor.set_mock_specs(&args.mock)?;
+    }
+
+    let mut engine = DebuggerEngine::new(executor, args.breakpoint.clone());
+
+    print_info("--- Execution Start ---\n");
+    let result = engine.execute(&args.function, parsed_args.as_deref())?;
+    print_success("\n--- Execution Complete ---");
+    print_success(format!("Result: {:?}", result));
+
+    if args.show_events {
+        let events = engine.executor().get_events()?;
+        let filtered_events = if let Some(topic) = &args.filter_topic {
+            crate::inspector::events::EventInspector::filter_events(&events, topic)
+        } else {
+            events
+        };
+
+        if !filtered_events.is_empty() {
+            print_info("\n--- Events ---");
+            for (i, event) in filtered_events.iter().enumerate() {
+                print_info(format!("Event #{}: {:?}", i, event));
+            }
+        }
+    }
+
+    if args.show_auth {
+        let auth_tree = engine.executor().get_auth_tree()?;
+        println!("\n--- Authorizations ---");
+        crate::inspector::auth::AuthInspector::display(&auth_tree);
+    }
+
+    print_info("\nWaiting for changes...");
+    Ok(())
+}
+
+/// Clear the terminal screen
+fn clear_terminal() {
+    print!("\x1B[2J\x1B[1;1H");
+    std::io::Write::flush(&mut std::io::stdout()).ok();
 }
 
 /// Execute batch mode with parallel execution
@@ -95,10 +271,15 @@ fn run_batch(args: &RunArgs, batch_file: &std::path::Path) -> Result<()> {
 }
 
 /// Execute the run command.
-pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
+pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     // Handle batch execution mode
     if let Some(batch_file) = &args.batch_args {
         return run_batch(&args, batch_file);
+    }
+
+    // Handle watch mode
+    if args.watch {
+        return run_watch_mode(args);
     }
 
     if args.dry_run {
@@ -110,6 +291,20 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
 
     let wasm_bytes = fs::read(&args.contract)
         .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
+
+    let checksum = crate::utils::wasm::compute_checksum(&wasm_bytes);
+    if verbosity == Verbosity::Verbose {
+        print_info(format!("WASM SHA-256 Checksum: {}", checksum));
+    }
+    if let Some(ref expected) = args.expected_hash {
+        if checksum != *expected {
+            anyhow::bail!(
+                "WASM checksum mismatch! Expected {}, but got {}",
+                expected,
+                checksum
+            );
+        }
+    }
 
     print_success(format!(
         "Contract loaded successfully ({} bytes)",
@@ -161,6 +356,8 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     logging::log_execution_start(&args.function, parsed_args.as_deref());
 
     let mut executor = ContractExecutor::new(wasm_bytes.clone())?;
+    executor.set_timeout(args.timeout);
+
     if let Some(storage) = initial_storage {
         executor.set_initial_storage(storage)?;
     }
@@ -187,10 +384,27 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     }
 
     print_info("\n--- Execution Start ---\n");
+    let storage_before = engine.executor().get_storage_snapshot()?;
     let result = engine.execute(&args.function, parsed_args.as_deref())?;
+    let storage_after = engine.executor().get_storage_snapshot()?;
     print_success("\n--- Execution Complete ---\n");
     print_success(format!("Result: {:?}", result));
     logging::log_execution_complete(&result);
+
+    let storage_diff = crate::inspector::storage::StorageInspector::compute_diff(
+        &storage_before,
+        &storage_after,
+        &args.alert_on_change,
+    );
+    if !storage_diff.is_empty() || !args.alert_on_change.is_empty() {
+        print_info("\n--- Storage Changes ---");
+        crate::inspector::storage::StorageInspector::display_diff(&storage_diff);
+    }
+
+    if let Some(export_path) = &args.export_storage {
+        print_info(format!("\nExporting storage to: {:?}", export_path));
+        crate::inspector::storage::StorageState::export_to_file(&storage_after, export_path)?;
+    }
     let mock_calls = engine.executor().get_mock_call_log();
     if !args.mock.is_empty() {
         display_mock_call_log(&mock_calls);
@@ -283,6 +497,8 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     {
         let mut output = serde_json::json!({
             "result": result,
+            "wasm_hash": checksum,
+            "alerts": storage_diff.triggered_alerts,
         });
 
         if let Some(events) = json_events {
@@ -804,8 +1020,12 @@ pub fn compare(args: CompareArgs) -> Result<()> {
 
 /// Execute the symbolic command.
 pub fn symbolic(args: SymbolicArgs, _verbosity: Verbosity) -> Result<()> {
-    print_info(format!("Starting symbolic execution analysis for contract: {:?}", args.contract));
-    let wasm_bytes = fs::read(&args.contract).with_context(|| format!("Failed to read WASM file {:?}", args.contract))?;
+    print_info(format!(
+        "Starting symbolic execution analysis for contract: {:?}",
+        args.contract
+    ));
+    let wasm_bytes = fs::read(&args.contract)
+        .with_context(|| format!("Failed to read WASM file {:?}", args.contract))?;
 
     let analyzer = crate::analyzer::symbolic::SymbolicAnalyzer::new();
     let report = analyzer.analyze(&wasm_bytes, &args.function)?;
@@ -820,7 +1040,7 @@ pub fn symbolic(args: SymbolicArgs, _verbosity: Verbosity) -> Result<()> {
     } else {
         println!("{}", toml);
     }
-    
+
     Ok(())
 }
 

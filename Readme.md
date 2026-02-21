@@ -98,7 +98,22 @@ Options:
   -b, --breakpoint <NAME>   Set breakpoint at function name
       --storage-filter <PATTERN>  Filter storage by key pattern (repeatable)
       --batch-args <FILE>   Path to JSON file with array of argument sets for batch execution
+      --watch               Watch the WASM file for changes and automatically re-run
 ```
+
+### Watch Mode
+
+Automatically reload and re-run when the WASM file changes:
+
+```bash
+soroban-debug run \
+  --contract target/wasm32-unknown-unknown/release/my_contract.wasm \
+  --function transfer \
+  --args '["user1", "user2", 100]' \
+  --watch
+```
+
+Perfect for development - edit your contract, rebuild, and see results immediately. See [docs/watch-mode.md](docs/watch-mode.md) for details.
 
 ### Batch Execution
 

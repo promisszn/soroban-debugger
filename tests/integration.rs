@@ -12,5 +12,8 @@ mod budget_threshold_tests;
 #[path = "integration/storage_snapshot_tests.rs"]
 mod storage_snapshot_tests;
 
+#[path = "integration/full_session_test.rs"]
+mod full_session_test;
+
 #[path = "instruction_stepping_tests.rs"]
 mod instruction_stepping_tests;
