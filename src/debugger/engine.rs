@@ -36,13 +36,13 @@ impl DebuggerEngine {
         info!("Executing function: {}", function);
 
         // Initialize stack state
-        self.state.set_current_function(function.to_string());
+        self.state.set_current_function(function.to_string(), args.map(|a| a.to_string()));
         self.state.call_stack_mut().clear();
         self.state.call_stack_mut().push(function.to_string(), None);
 
         // Check if we should break at function entry
         if self.breakpoints.should_break(function) {
-            self.pause_at_function(function);
+            self.pause_at_function(function, args);
         }
 
         // Execute the contract
@@ -121,11 +121,10 @@ impl DebuggerEngine {
     }
 
     /// Pause execution at a function
-    fn pause_at_function(&mut self, function: &str) {
-        println!("\n[BREAKPOINT] Paused at function: {}", function);
+    fn pause_at_function(&mut self, function: &str, args: Option<&str>) {
         self.paused = true;
-        self.state.set_current_function(function.to_string());
-        self.state.call_stack().display();
+        self.state.set_current_function(function.to_string(), args.map(|a| a.to_string()));
+        info!("Breakpoint triggered at function: {}", function);
     }
 
     /// Check if debugger is currently paused

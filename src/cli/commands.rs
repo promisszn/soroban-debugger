@@ -129,7 +129,13 @@ pub fn interactive(args: InteractiveArgs) -> Result<()> {
     }
 
     // Create executor
-    let executor = ContractExecutor::new(wasm_bytes)?;
+    let mut executor = ContractExecutor::new(wasm_bytes)?;
+
+    // Set up initial storage if provided
+    if let Some(storage_json) = &args.storage {
+        let storage = parse_storage(storage_json)?;
+        executor.set_initial_storage(storage)?;
+    }
 
     // Create debugger engine
     let engine = DebuggerEngine::new(executor, vec![]);
@@ -139,6 +145,17 @@ pub fn interactive(args: InteractiveArgs) -> Result<()> {
     println!("Type 'help' for available commands\n");
 
     let mut ui = DebuggerUI::new(engine)?;
+    
+    // If storage was provided, sync it with the UI inspector
+    if let Some(storage_json) = &args.storage {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(storage_json) {
+            if let Some(obj) = value.as_object() {
+                for (k, v) in obj {
+                    ui.storage_inspector_mut().set(k, v.to_string());
+                }
+            }
+        }
+    }
     ui.run()?;
 
     Ok(())

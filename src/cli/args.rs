@@ -88,6 +88,10 @@ pub struct InteractiveArgs {
     #[arg(long)]
     pub network_snapshot: Option<PathBuf>,
 
+    /// Initial storage state as JSON object
+    #[arg(short, long)]
+    pub storage: Option<String>,
+
     /// Enable verbose output
     #[arg(short, long)]
     pub verbose: bool,

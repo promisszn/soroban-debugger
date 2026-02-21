@@ -4,6 +4,7 @@ use crate::inspector::stack::CallStackInspector;
 #[derive(Debug, Clone, Default)]
 pub struct DebugState {
     current_function: Option<String>,
+    current_args: Option<String>,
     step_count: usize,
     call_stack: CallStackInspector,
 }
@@ -13,19 +14,26 @@ impl DebugState {
     pub fn new() -> Self {
         Self {
             current_function: None,
+            current_args: None,
             step_count: 0,
             call_stack: CallStackInspector::new(),
         }
     }
 
     /// Set the current function being executed
-    pub fn set_current_function(&mut self, function: String) {
+    pub fn set_current_function(&mut self, function: String, args: Option<String>) {
         self.current_function = Some(function);
+        self.current_args = args;
     }
 
     /// Get the current function
     pub fn current_function(&self) -> Option<&str> {
         self.current_function.as_deref()
+    }
+
+    /// Get current function arguments
+    pub fn current_args(&self) -> Option<&str> {
+        self.current_args.as_deref()
     }
 
     /// Increment step count
@@ -51,6 +59,7 @@ impl DebugState {
     /// Reset the state
     pub fn reset(&mut self) {
         self.current_function = None;
+        self.current_args = None;
         self.step_count = 0;
         self.call_stack.clear();
     }
