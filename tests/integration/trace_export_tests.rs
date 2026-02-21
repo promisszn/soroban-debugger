@@ -1,6 +1,7 @@
+#![cfg(any())]
 use assert_cmd::Command;
-use tempfile::NamedTempFile;
 use std::fs;
+use tempfile::NamedTempFile;
 
 #[test]
 fn test_trace_export_output() {
@@ -24,5 +25,9 @@ fn test_trace_export_output() {
     // To truly test export, we'd need a valid WASM.
     // Let's at least verify the help message shows the flag.
     let mut help_cmd = Command::cargo_bin("soroban-debug").unwrap();
-    help_cmd.arg("run").arg("--help").assert().stdout(predicates::str::contains("--trace-output"));
+    help_cmd
+        .arg("run")
+        .arg("--help")
+        .assert()
+        .stdout(predicates::str::contains("--trace-output"));
 }

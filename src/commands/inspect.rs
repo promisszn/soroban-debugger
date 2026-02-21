@@ -3,7 +3,6 @@
 
 use std::{fs, path::Path};
 
-use crate::output::OutputConfig;
 use crate::{
     utils::wasm::{
         extract_contract_metadata, get_module_info,
@@ -72,7 +71,7 @@ fn print_report(path: &Path, wasm_bytes: &[u8]) -> Result<()> {
     let signatures = parse_function_signatures(wasm_bytes)?;
     let metadata   = extract_contract_metadata(wasm_bytes)?;
 
-    let heavy = OutputConfig::double_rule_line(BAR_WIDTH);
+    let heavy = "═".repeat(BAR_WIDTH);
 
     // ── header ────────────────────────────────────────────────────────────────
     println!("{heavy}");
@@ -124,8 +123,6 @@ fn print_report(path: &Path, wasm_bytes: &[u8]) -> Result<()> {
     if signatures.is_empty() {
         println!("  (no contractspecv0 section found)");
     } else {
-        for name in &functions {
-            println!("  {} {name}", OutputConfig::to_ascii("•"));
         let name_w = signatures.iter().map(|s| s.name.len()).max().unwrap_or(8);
         println!("  {:<name_w$}  Signature", "Function", name_w = name_w);
         println!("  {}  {}", "─".repeat(name_w), "─".repeat(BAR_WIDTH - name_w - 4));
@@ -155,7 +152,7 @@ fn print_report(path: &Path, wasm_bytes: &[u8]) -> Result<()> {
     // ── contract metadata ─────────────────────────────────────────────────────
     section_header("Contract Metadata");
     if metadata.is_empty() {
-        println!("  {}  No metadata section embedded in this contract.", OutputConfig::to_ascii("⚠"));
+        println!("  ⚠  No metadata section embedded in this contract.");
     } else {
         print_field("Contract Version", &metadata.contract_version);
         print_field("SDK Version",      &metadata.sdk_version);
@@ -172,9 +169,9 @@ fn print_report(path: &Path, wasm_bytes: &[u8]) -> Result<()> {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 fn section_header(title: &str) {
-    // "─── Title ──────" (or ASCII equivalent when --no-unicode)
+    // "─── Title ──────" where total width equals BAR_WIDTH.
     let fill = BAR_WIDTH.saturating_sub(title.len() + 5);
-    println!("{} {title} {}", OutputConfig::to_ascii("─── "), OutputConfig::rule_line(fill));
+    println!("─── {title} {}", "─".repeat(fill));
 }
 
 /// Print a labelled row only when the value is `Some`.

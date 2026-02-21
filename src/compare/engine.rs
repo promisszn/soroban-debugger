@@ -3,7 +3,6 @@
 //! execution flow differences.
 
 use super::trace::{BudgetTrace, CallEntry, EventEntry, ExecutionTrace};
-use crate::output::OutputConfig;
 use std::collections::{BTreeMap, BTreeSet};
 
 // ─── Diff types ──────────────────────────────────────────────────────
@@ -266,19 +265,16 @@ impl CompareEngine {
     pub fn render_report(report: &ComparisonReport) -> String {
         let mut out = String::new();
 
-        let double_rule = OutputConfig::double_rule_line(59);
-        out.push_str(&format!("{double_rule}\n"));
         out.push_str("═══════════════════════════════════════════════════════════════\n");
         out.push_str("  Execution Trace Comparison\n");
         out.push_str(&format!(
             "  A: {}\n  B: {}\n",
             report.label_a, report.label_b
         ));
-        out.push_str(&format!("{double_rule}\n\n"));
         out.push_str("═══════════════════════════════════════════════════════════════\n\n");
 
         // ── Storage ────────────────────────────────────────────────
-        out.push_str(&format!("{}\n\n", OutputConfig::to_ascii("───────────────── Storage Changes ─────────────────")));
+        out.push_str("───────────────── Storage Changes ─────────────────\n\n");
         let sd = &report.storage_diff;
 
         if sd.only_in_a.is_empty() && sd.only_in_b.is_empty() && sd.modified.is_empty() {
@@ -315,7 +311,7 @@ impl CompareEngine {
         out.push('\n');
 
         // ── Budget ─────────────────────────────────────────────────
-        out.push_str(&format!("{}\n\n", OutputConfig::to_ascii("───────────────── Budget Usage ────────────────────")));
+        out.push_str("───────────────── Budget Usage ────────────────────\n\n");
         let bd = &report.budget_diff;
 
         match (&bd.a, &bd.b) {
@@ -369,7 +365,7 @@ impl CompareEngine {
         out.push('\n');
 
         // ── Return values ──────────────────────────────────────────
-        out.push_str(&format!("{}\n\n", OutputConfig::to_ascii("───────────────── Return Values ───────────────────")));
+        out.push_str("───────────────── Return Values ───────────────────\n\n");
         let rv = &report.return_value_diff;
 
         if rv.equal {
@@ -391,7 +387,7 @@ impl CompareEngine {
         out.push('\n');
 
         // ── Execution flow ─────────────────────────────────────────
-        out.push_str(&format!("{}\n\n", OutputConfig::to_ascii("───────────────── Execution Flow ──────────────────")));
+        out.push_str("───────────────── Execution Flow ──────────────────\n\n");
         let fd = &report.flow_diff;
 
         if fd.identical {
@@ -412,7 +408,7 @@ impl CompareEngine {
         out.push('\n');
 
         // ── Events ─────────────────────────────────────────────────
-        out.push_str(&format!("{}\n\n", OutputConfig::to_ascii("───────────────── Events ──────────────────────────")));
+        out.push_str("───────────────── Events ──────────────────────────\n\n");
         let ed = &report.event_diff;
 
         if ed.identical {
@@ -447,9 +443,6 @@ impl CompareEngine {
             }
         }
 
-        out.push_str(&format!(
-            "\n{double_rule}\n"
-        ));
         out.push_str("\n═══════════════════════════════════════════════════════════════\n");
 
         out

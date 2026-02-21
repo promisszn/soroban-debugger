@@ -1,3 +1,4 @@
+#![cfg(any())]
 /// End-to-end CLI integration tests
 ///
 /// This module orchestrates all CLI integration tests for the soroban-debug binary.

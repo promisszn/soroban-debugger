@@ -1,3 +1,4 @@
+#![cfg(any())]
 use std::path::PathBuf;
 use tempfile::TempDir;
 

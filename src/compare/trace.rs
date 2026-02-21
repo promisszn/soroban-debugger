@@ -12,10 +12,6 @@ use std::path::Path;
 /// Top-level execution trace that is serialized to / deserialized from JSON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionTrace {
-    /// Schema version (e.g. "1.0")
-    #[serde(default = "default_version")]
-    pub version: String,
-
     /// Human-readable label for this trace (e.g. "v1.0 transfer test")
     #[serde(default)]
     pub label: Option<String>,
@@ -32,16 +28,12 @@ pub struct ExecutionTrace {
     #[serde(default)]
     pub args: Option<String>,
 
-    /// Storage state before execution
-    #[serde(default)]
-    pub storage_before: BTreeMap<String, String>,
-
     /// Storage state after execution (key → value).
     /// Uses BTreeMap for deterministic ordering.
     #[serde(default)]
-    pub storage: BTreeMap<String, String>,
+    pub storage: BTreeMap<String, serde_json::Value>,
 
-    /// Total resource budget consumed during execution
+    /// Resource budget consumed during execution
     #[serde(default)]
     pub budget: Option<BudgetTrace>,
 
@@ -56,10 +48,6 @@ pub struct ExecutionTrace {
     /// Events emitted during execution
     #[serde(default)]
     pub events: Vec<EventEntry>,
-}
-
-fn default_version() -> String {
-    "1.0".to_string()
 }
 
 /// Budget / resource usage captured in a trace.
@@ -84,9 +72,6 @@ pub struct CallEntry {
     /// Nesting depth (0 = top-level)
     #[serde(default)]
     pub depth: u32,
-    /// Resource usage at this step
-    #[serde(default)]
-    pub budget: Option<BudgetTrace>,
 }
 
 /// A single event emitted during execution.

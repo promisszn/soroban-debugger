@@ -29,10 +29,6 @@
 
 use hex;
 use serde_json::Value;
-use soroban_sdk::{
-    Address, Bytes, BytesN, Env, Map, String as SorobanString, Symbol, TryFromVal, Val, Vec as SorobanVec,
-    Bytes, Env, Map, String as SorobanString, Symbol, TryFromVal, Val, Vec as SorobanVec,
-};
 use soroban_sdk::{Env, Map, String as SorobanString, Symbol, TryFromVal, Val, Vec as SorobanVec};
 use thiserror::Error;
 use tracing::{debug, warn};
@@ -43,7 +39,7 @@ pub enum ArgumentParseError {
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 
-    #[error("Unsupported type: {0}. Supported types: u32, i32, u64, i64, u128, i128, bool, string, symbol, address, option, tuple")]
+    #[error("Unsupported type: {0}. Supported types: u32, i32, u64, i64, u128, i128, bool, string, symbol, option, tuple")]
     UnsupportedType(String),
 
     #[error("Failed to convert value: {0}")]
@@ -189,7 +185,6 @@ impl ArgumentParser {
             "bool" => self.convert_bool(val),
             "string" => self.convert_string(val),
             "symbol" => self.convert_symbol(val),
-            "address" => self.convert_address(val),
             "option" => self.convert_option(val),
             "tuple" => self.convert_tuple(val, obj),
             "vec" => self.convert_vec(val, obj),
@@ -197,33 +192,6 @@ impl ArgumentParser {
             "bytesn" => self.convert_bytesn(val, obj),
             other => Err(ArgumentParseError::UnsupportedType(other.to_string())),
         }
-    }
-
-    /// Convert a JSON string to a Soroban Address Val
-    fn convert_address(&self, value: &Value) -> Result<Val, ArgumentParseError> {
-        let s = value.as_str().ok_or_else(|| ArgumentParseError::TypeMismatch {
-            expected: "address (string)".to_string(),
-            actual: format!("{}", value),
-        })?;
-
-        use std::panic::{catch_unwind, AssertUnwindSafe};
-        let parsed = catch_unwind(AssertUnwindSafe(|| {
-            Address::from_str(&self.env, s)
-        }));
-
-        let address = match parsed {
-            Ok(addr) => addr,
-            Err(_) => {
-                return Err(ArgumentParseError::ConversionError(format!(
-                    "Invalid address format: {}",
-                    s
-                )))
-            }
-        };
-
-        Val::try_from_val(&self.env, &address).map_err(|e| {
-            ArgumentParseError::ConversionError(format!("Failed to convert Address to Val: {:?}", e))
-        })
     }
 
     /// Convert a JSON number to u32 Val
@@ -577,24 +545,6 @@ impl ArgumentParser {
                 }
             }
             Value::String(s) => {
-                // If it looks like an address (starts with C or G and is 56 chars), try to parse as address
-                if (s.starts_with('C') || s.starts_with('G')) && s.len() == 56 {
-                    use std::panic::{catch_unwind, AssertUnwindSafe};
-                    let parsed = catch_unwind(AssertUnwindSafe(|| {
-                        Address::from_str(&self.env, s)
-                    }));
-
-                    if let Ok(address) = parsed {
-                        debug!("Converting string to Address: {}", s);
-                        return Val::try_from_val(&self.env, &address).map_err(|e| {
-                            ArgumentParseError::ConversionError(format!(
-                                "Failed to convert detected Address to Val: {:?}",
-                                e
-                            ))
-                        });
-                    }
-                }
-
                 debug!("Converting string to Symbol: {}", s);
                 // Default bare strings to Symbol (backward compatible)
                 let symbol = Symbol::new(&self.env, s);
@@ -699,26 +649,6 @@ impl ArgumentParser {
         }
 
         Ok(soroban_map.into())
-    }
-
-    #[allow(dead_code)]
-    fn string_to_bytes(&self, input: &str) -> Result<Vec<u8>, String> {
-        if let Some(hex_str) = input.strip_prefix("0x") {
-            hex::decode(hex_str).map_err(|e| format!("Invalid hex: {}", e))
-        } else if let Some(b64_str) = input.strip_prefix("base64:") {
-            general_purpose::STANDARD
-                .decode(b64_str)
-                .map_err(|e| format!("Invalid base64: {}", e))
-        } else {
-            Err("Bytes must start with '0x' or 'base64:'".to_string())
-        }
-    }
-
-    // Example of how to integrate into the main parser
-    #[allow(dead_code)]
-    fn parse_as_bytes(&self, input: &str) -> Result<Bytes, String> {
-        let vec = self.string_to_bytes(input)?;
-        Ok(Bytes::from_slice(&self.env, &vec))
     }
 }
 

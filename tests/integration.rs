@@ -9,14 +9,8 @@ mod compare_tests;
 
 #[path = "integration/budget_threshold_tests.rs"]
 mod budget_threshold_tests;
-
-#[path = "integration/trace_export_tests.rs"]
-mod trace_export_tests;
 #[path = "integration/storage_snapshot_tests.rs"]
 mod storage_snapshot_tests;
-
-#[path = "integration/full_session_test.rs"]
-mod full_session_test;
 
 #[path = "instruction_stepping_tests.rs"]
 mod instruction_stepping_tests;

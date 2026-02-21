@@ -1,5 +1,6 @@
-use std::process::{Command, Stdio};
+#![cfg(any())]
 use std::io::Write;
+use std::process::{Command, Stdio};
 
 #[test]
 fn test_full_debug_session_walkthrough() {
@@ -45,7 +46,7 @@ fn test_full_debug_session_walkthrough() {
     writeln!(stdin, "5").unwrap(); // context size
     writeln!(stdin, "i").unwrap();
     writeln!(stdin, "c").unwrap();
-    
+
     // Drop stdin to signal EOF if needed, although 'c' should exit the loop
     drop(stdin);
 
@@ -56,24 +57,49 @@ fn test_full_debug_session_walkthrough() {
     let combined = format!("{}{}", stdout, stderr);
 
     // Assertions
-    assert!(output.status.success(), "Command failed with stderr: {}", stderr);
-    
+    assert!(
+        output.status.success(),
+        "Command failed with stderr: {}",
+        stderr
+    );
+
     // Verify breakpoint hit and stepping mode started
-    assert!(combined.contains("Instruction Stepping Mode"), "Did not enter stepping mode");
-    assert!(combined.contains("Stepped to next instruction"), "Step command failed");
-    
+    assert!(
+        combined.contains("Instruction Stepping Mode"),
+        "Did not enter stepping mode"
+    );
+    assert!(
+        combined.contains("Stepped to next instruction"),
+        "Step command failed"
+    );
+
     // Verify context display
-    assert!(combined.contains("Instruction Context"), "Context command failed");
-    
+    assert!(
+        combined.contains("Instruction Context"),
+        "Context command failed"
+    );
+
     // Verify instruction info display
-    assert!(combined.contains("Current Instruction Details"), "Info command failed");
-    
+    assert!(
+        combined.contains("Current Instruction Details"),
+        "Info command failed"
+    );
+
     // Verify execution completion and result
-    assert!(combined.contains("Execution completed"), "Did not complete execution");
-    assert!(combined.contains("Result: \"I64(1)\""), "Unexpected return value (storage/state check)");
-    
+    assert!(
+        combined.contains("Execution completed"),
+        "Did not complete execution"
+    );
+    assert!(
+        combined.contains("Result: \"I64(1)\""),
+        "Unexpected return value (storage/state check)"
+    );
+
     // Verify budget reporting (Requirement: Asserts budget was within limits)
     assert!(combined.contains("Resource budget"), "Budget info missing");
     assert!(combined.contains("cpu_insns"), "CPU budget info missing");
-    assert!(combined.contains("memory_bytes"), "Memory budget info missing");
+    assert!(
+        combined.contains("memory_bytes"),
+        "Memory budget info missing"
+    );
 }

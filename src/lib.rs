@@ -8,7 +8,6 @@ pub mod debugger;
 pub mod history;
 pub mod inspector;
 pub mod logging;
-pub mod output;
 pub mod profiler;
 pub mod repeat;
 pub mod runtime;

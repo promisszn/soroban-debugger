@@ -2,6 +2,6 @@ pub mod args;
 pub mod commands;
 
 pub use args::{
-    Cli, Commands, CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, RunArgs,
-    UpgradeCheckArgs, Verbosity,
+    Cli, Commands, CompareArgs, CompletionsArgs, InspectArgs, InteractiveArgs, OptimizeArgs,
+    ProfileArgs, RunArgs, TuiArgs, UpgradeCheckArgs, Verbosity,
 };

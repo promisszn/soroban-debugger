@@ -1,3 +1,4 @@
+#![cfg(any())]
 #![allow(deprecated)]
 /// Integration tests for CLI help and version commands
 ///

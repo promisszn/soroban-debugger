@@ -1,175 +1,36 @@
-use std::collections::HashMap;
-use std::fmt;
-
-/// Represents an operator for conditional breakpoints
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Operator {
-    Eq,
-    Ne,
-    Gt,
-    Lt,
-    Ge,
-    Le,
-}
-
-impl fmt::Display for Operator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Operator::Eq => "==",
-            Operator::Ne => "!=",
-            Operator::Gt => ">",
-            Operator::Lt => "<",
-            Operator::Ge => ">=",
-            Operator::Le => "<=",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-/// Represents a condition for a breakpoint
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Condition {
-    /// storage[key] OP value
-    Storage {
-        key: String,
-        operator: Operator,
-        value: String,
-    },
-    /// arg_name OP value
-    Argument {
-        name: String,
-        operator: Operator,
-        value: String,
-    },
-}
-
-impl fmt::Display for Condition {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Condition::Storage { key, operator, value } => {
-                write!(f, "storage[{}] {} {}", key, operator, value)
-            }
-            Condition::Argument { name, operator, value } => {
-                write!(f, "{} {} {}", name, operator, value)
-            }
-        }
-    }
-}
-
-/// Represents a breakpoint with an optional condition
-#[derive(Debug, Clone)]
-pub struct Breakpoint {
-    pub function: String,
-    pub condition: Option<Condition>,
-}
-
-impl fmt::Display for Breakpoint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(condition) = &self.condition {
-            write!(f, "{} (if {})", self.function, condition)
-        } else {
-            write!(f, "{}", self.function)
-        }
-    }
-}
+use std::collections::HashSet;
 
 /// Manages breakpoints during debugging
 pub struct BreakpointManager {
-    breakpoints: HashMap<String, Breakpoint>,
+    breakpoints: HashSet<String>,
 }
 
 impl BreakpointManager {
     /// Create a new breakpoint manager
     pub fn new() -> Self {
         Self {
-            breakpoints: HashMap::new(),
+            breakpoints: HashSet::new(),
         }
     }
 
-    /// Add a breakpoint at a function name with an optional condition
-    pub fn add(&mut self, function: &str, condition: Option<Condition>) {
-        self.breakpoints.insert(
-            function.to_string(),
-            Breakpoint {
-                function: function.to_string(),
-                condition,
-            },
-        );
+    /// Add a breakpoint at a function name
+    pub fn add(&mut self, function: &str) {
+        self.breakpoints.insert(function.to_string());
     }
 
     /// Remove a breakpoint
     pub fn remove(&mut self, function: &str) -> bool {
-        self.breakpoints.remove(function).is_some()
+        self.breakpoints.remove(function)
     }
 
-    /// Check if execution should break at this function, considering conditions
-    pub fn should_break(&self, function: &str, storage: &HashMap<String, String>, args_json: Option<&str>) -> bool {
-        if let Some(bp) = self.breakpoints.get(function) {
-            if let Some(condition) = &bp.condition {
-                return self.evaluate_condition(condition, storage, args_json);
-            }
-            return true;
-        }
-        false
-    }
-
-    fn evaluate_condition(&self, condition: &Condition, storage: &HashMap<String, String>, args_json: Option<&str>) -> bool {
-        match condition {
-            Condition::Storage { key, operator, value } => {
-                if let Some(actual_value) = storage.get(key) {
-                    self.compare_values(actual_value, value, *operator)
-                } else {
-                    false
-                }
-            }
-            Condition::Argument { name, operator, value } => {
-                if let Some(args_str) = args_json {
-                    // Try to find the argument value in the JSON string
-                    // Simple search for now, could be improved with real JSON parsing
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(args_str) {
-                        if let Some(actual_val) = v.get(name) {
-                            let actual_str = match actual_val {
-                                serde_json::Value::String(s) => s.clone(),
-                                serde_json::Value::Number(n) => n.to_string(),
-                                serde_json::Value::Bool(b) => b.to_string(),
-                                _ => format!("{:?}", actual_val),
-                            };
-                            return self.compare_values(&actual_str, value, *operator);
-                        }
-                    }
-                }
-                false
-            }
-        }
-    }
-
-    fn compare_values(&self, actual: &str, expected: &str, op: Operator) -> bool {
-        // Try numeric comparison first
-        if let (Ok(a), Ok(e)) = (actual.parse::<i128>(), expected.parse::<i128>()) {
-            return match op {
-                Operator::Eq => a == e,
-                Operator::Ne => a != e,
-                Operator::Gt => a > e,
-                Operator::Lt => a < e,
-                Operator::Ge => a >= e,
-                Operator::Le => a <= e,
-            };
-        }
-
-        // Fallback to string comparison
-        match op {
-            Operator::Eq => actual == expected,
-            Operator::Ne => actual != expected,
-            Operator::Gt => actual > expected,
-            Operator::Lt => actual < expected,
-            Operator::Ge => actual >= expected,
-            Operator::Le => actual <= expected,
-        }
+    /// Check if execution should break at this function
+    pub fn should_break(&self, function: &str) -> bool {
+        self.breakpoints.contains(function)
     }
 
     /// List all breakpoints
-    pub fn list(&self) -> Vec<Breakpoint> {
-        self.breakpoints.values().cloned().collect()
+    pub fn list(&self) -> Vec<String> {
+        self.breakpoints.iter().cloned().collect()
     }
 
     /// Clear all breakpoints
@@ -249,5 +110,37 @@ fn split_op_value(s: &str) -> Result<(Operator, String), String> {
 impl Default for BreakpointManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_breakpoint() {
+        let mut manager = BreakpointManager::new();
+        manager.add("transfer");
+        assert!(manager.should_break("transfer"));
+        assert!(!manager.should_break("mint"));
+    }
+
+    #[test]
+    fn test_remove_breakpoint() {
+        let mut manager = BreakpointManager::new();
+        manager.add("transfer");
+        assert!(manager.remove("transfer"));
+        assert!(!manager.should_break("transfer"));
+    }
+
+    #[test]
+    fn test_list_breakpoints() {
+        let mut manager = BreakpointManager::new();
+        manager.add("transfer");
+        manager.add("mint");
+        let list = manager.list();
+        assert_eq!(list.len(), 2);
+        assert!(list.contains(&"transfer".to_string()));
+        assert!(list.contains(&"mint".to_string()));
     }
 }

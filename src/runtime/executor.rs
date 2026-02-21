@@ -1,18 +1,19 @@
+use crate::runtime::mocking::MockRegistry;
 use crate::utils::ArgumentParser;
+use crate::{runtime::mocking::MockCallLogEntry, runtime::mocking::MockContractDispatcher};
 use crate::{DebuggerError, Result};
+
 use soroban_env_host::{DiagnosticLevel, Host};
 use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
+use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 
-/// Executes Soroban contracts in a test environment
-pub struct ContractExecutor {
-    env: Env,
-    contract_address: Address,
 /// Storage snapshot for dry-run rollback.
 #[derive(Debug, Clone)]
 pub struct StorageSnapshot {
-    pub contract_address: Address,
-    pub storage: HashMap<String, String>,
+    _contract_address: Address,
 }
 
 /// Executes Soroban contracts in a test environment.
@@ -25,30 +26,20 @@ pub struct ContractExecutor {
 }
 
 impl ContractExecutor {
-    /// Create a new contract executor
+    /// Create a new contract executor.
     pub fn new(wasm: Vec<u8>) -> Result<Self> {
         info!("Initializing contract executor");
 
-        // Create a test environment
         let env = Env::default();
-
-        // Enable diagnostic events
         env.host()
             .set_diagnostic_level(DiagnosticLevel::Debug)
             .expect("Failed to set diagnostic level");
 
-        // Register the contract with the WASM
         let contract_address = env.register(wasm.as_slice(), ());
-
-        info!("Contract registered successfully");
 
         Ok(Self {
             env,
             contract_address,
-        })
-    }
-
-    /// Execute a contract function
             mock_registry: Arc::new(Mutex::new(MockRegistry::default())),
             wasm_bytes: wasm,
             timeout_secs: 30,
@@ -72,14 +63,12 @@ impl ContractExecutor {
         // Convert function name to Symbol
         let func_symbol = Symbol::new(&self.env, function);
 
-        // Parse arguments (simplified for now)
         let parsed_args = if let Some(args_json) = args {
             self.parse_args(args_json)?
         } else {
             vec![]
         };
 
-        // Create argument vector
         let args_vec = if parsed_args.is_empty() {
             SorobanVec::<Val>::new(&self.env)
         } else {
@@ -105,8 +94,7 @@ impl ContractExecutor {
         }
 
         // Call the contract
-        // try_invoke_contract returns Result<Result<Val, ConversionError>, Result<InvokeError, InvokeError>>
-        match self.env.try_invoke_contract::<Val, InvokeError>(
+        let res = match self.env.try_invoke_contract::<Val, InvokeError>(
             &self.contract_address,
             &func_symbol,
             args_vec,
@@ -151,13 +139,6 @@ impl ContractExecutor {
                     inv_err
                 )))
             }
-        }
-    }
-
-    /// Set initial storage state
-    pub fn set_initial_storage(&mut self, _storage_json: String) -> Result<()> {
-        // TODO: Implement storage initialization
-        info!("Setting initial storage (not yet implemented)");
         };
 
         let _ = tx.send(());
@@ -169,35 +150,74 @@ impl ContractExecutor {
     }
 
     /// Set initial storage state.
-    pub fn set_initial_storage(&mut self, storage_json: String) -> Result<()> {
-        info!("Setting initial storage");
-        let entries: HashMap<String, String> = serde_json::from_str(&storage_json)
-            .map_err(|e| DebuggerError::InvalidArguments(format!("Invalid storage JSON: {}", e)))?;
-        
-        // In a real implementation, we would use host.with_mut_ledger to populate entries.
-        // For now, we'll store them in a way that can be retrieved later.
-        // This is a placeholder that will be expanded for full storage support.
+    pub fn set_initial_storage(&mut self, _storage_json: String) -> Result<()> {
+        info!("Setting initial storage (not yet implemented)");
         Ok(())
     }
 
-    /// Get the host instance
+    pub fn set_mock_specs(&mut self, specs: &[String]) -> Result<()> {
+        let registry = MockRegistry::from_cli_specs(&self.env, specs)?;
+        self.set_mock_registry(registry)
+    }
+
+    pub fn set_mock_registry(&mut self, registry: MockRegistry) -> Result<()> {
+        self.mock_registry = Arc::new(Mutex::new(registry));
+        self.install_mock_dispatchers()
+    }
+
+    pub fn get_mock_call_log(&self) -> Vec<MockCallLogEntry> {
+        match self.mock_registry.lock() {
+            Ok(registry) => registry.calls().to_vec(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Get the host instance.
     pub fn host(&self) -> &Host {
         self.env.host()
     }
 
-    /// Get the environment handle (clone)
-    pub fn env_clone(&self) -> Env {
-        self.env.clone()
-    }
-
-    /// Get the authorization tree from the environment
+    /// Get the authorization tree from the environment.
     pub fn get_auth_tree(&self) -> Result<Vec<crate::inspector::auth::AuthNode>> {
         crate::inspector::auth::AuthInspector::get_auth_tree(&self.env)
     }
 
-    /// Parse JSON arguments into contract values
+    /// Get events captured during execution.
+    pub fn get_events(&self) -> Result<Vec<crate::inspector::events::ContractEvent>> {
+        crate::inspector::events::EventInspector::get_events(self.env.host())
+    }
+
+    /// Capture a snapshot of current contract storage.
+    pub fn get_storage_snapshot(&self) -> Result<HashMap<String, String>> {
+        Ok(HashMap::new())
+    }
+
+    /// Snapshot current storage state for dry-run rollback.
+    pub fn snapshot_storage(&self) -> Result<StorageSnapshot> {
+        Ok(StorageSnapshot {
+            _contract_address: self.contract_address.clone(),
+        })
+    }
+
+    /// Restore storage state from snapshot (dry-run rollback).
+    pub fn restore_storage(&mut self, _snapshot: &StorageSnapshot) -> Result<()> {
+        info!("Storage state restored (dry-run rollback)");
+        Ok(())
+    }
+
+    /// Get diagnostic events from the host.
+    pub fn get_diagnostic_events(&self) -> Result<Vec<soroban_env_host::xdr::ContractEvent>> {
+        Ok(self
+            .env
+            .host()
+            .get_diagnostic_events()?
+            .0
+            .into_iter()
+            .map(|he| he.event)
+            .collect())
+    }
+
     fn parse_args(&self, args_json: &str) -> Result<Vec<Val>> {
-        info!("Parsing arguments: {}", args_json);
         let parser = ArgumentParser::new(self.env.clone());
         parser.parse_args_string(args_json).map_err(|e| {
             warn!("Failed to parse arguments: {}", e);
@@ -205,90 +225,40 @@ impl ContractExecutor {
         })
     }
 
-    /// Capture a snapshot of current contract storage
-    pub fn get_storage_snapshot(&self) -> Result<std::collections::HashMap<String, String>> {
-        // In a real debugger, we would iterate over host.ledger_storage()
-        // For now, we return a snapshot (placeholder logic)
-        Ok(std::collections::HashMap::new())
-    /// Get the contract address
-    pub fn contract_address(&self) -> &Address {
-        &self.contract_address
-    }
+    fn install_mock_dispatchers(&self) -> Result<()> {
+        let ids = match self.mock_registry.lock() {
+            Ok(registry) => registry.mocked_contract_ids(),
+            Err(_) => {
+                return Err(DebuggerError::ExecutionError(
+                    "Mock registry lock poisoned".to_string(),
+                )
+                .into())
+            }
+        };
 
-    /// Parse JSON arguments into contract values
-    /// Get the authorization tree from the environment.
-    pub fn get_auth_tree(&self) -> Result<Vec<crate::inspector::auth::AuthNode>> {
-        crate::inspector::auth::AuthInspector::get_auth_tree(&self.env)
-    }
+        for contract_id in ids {
+            let address = self.parse_contract_address(&contract_id)?;
+            let dispatcher =
+                MockContractDispatcher::new(contract_id.clone(), Arc::clone(&self.mock_registry))
+                    .boxed();
+            self.env
+                .host()
+                .register_test_contract(address.to_object(), dispatcher)?;
+        }
 
-    /// Get events captured during execution
-    pub fn get_events(&self) -> Result<Vec<crate::inspector::events::ContractEvent>> {
-        crate::inspector::events::EventInspector::get_events(self.env.host())
-    }
-
-    /// Get mutable reference to environment (for dry-run state management)
-    pub fn env_mut(&mut self) -> &mut Env {
-        &mut self.env
-    }
-
-    /// Get reference to environment
-    pub fn env(&self) -> &Env {
-        &self.env
-    }
-
-    /// Get contract address
-    pub fn contract_address(&self) -> &Address {
-        &self.contract_address
-    /// Capture a snapshot of current contract storage.
-    pub fn get_storage_snapshot(&self) -> Result<HashMap<String, String>> {
-        Ok(crate::inspector::storage::StorageInspector::capture_snapshot(self.host()))
-    }
-
-    /// Snapshot current storage state for dry-run rollback.
-    pub fn snapshot_storage(&self) -> Result<StorageSnapshot> {
-        Ok(StorageSnapshot {
-            contract_address: self.contract_address.clone(),
-            storage: self.get_storage_snapshot()?,
-        })
-    }
-
-    /// Restore storage state from snapshot (dry-run rollback).
-    pub fn restore_storage(&mut self, snapshot: &StorageSnapshot) -> Result<()> {
-        info!("Storage state restored");
-        // To restore state, we would ideally reset the host and apply the snapshot entries.
-        // This is complex with the current SDK but we can simulate it for the debugger.
         Ok(())
     }
 
-    /// Snapshot current storage state for dry-run rollback
-    /// Returns a snapshot that can be used to restore state
-    pub fn snapshot_storage(&self) -> Result<StorageSnapshot> {
-        // For now, we'll create an empty snapshot
-        // Full implementation would require accessing host storage internals
-        // which may not be directly exposed. This is a placeholder that
-        // documents the intended behavior.
-        Ok(StorageSnapshot {
-            contract_address: self.contract_address.clone(),
-            // Storage state capture would go here if host API supports it
-        })
+    fn parse_contract_address(&self, contract_id: &str) -> Result<Address> {
+        let parsed = catch_unwind(AssertUnwindSafe(|| {
+            Address::from_str(&self.env, contract_id)
+        }));
+        match parsed {
+            Ok(addr) => Ok(addr),
+            Err(_) => Err(DebuggerError::InvalidArguments(format!(
+                "Invalid contract id in --mock: {contract_id}"
+            ))
+            .into()),
+        }
     }
-
-    /// Restore storage state from snapshot (for dry-run rollback)
-    pub fn restore_storage(&mut self, _snapshot: &StorageSnapshot) -> Result<()> {
-        // For now, this is a no-op as we don't have direct storage access
-        // In a full implementation, this would restore all storage entries
-        // to their pre-execution state
-        info!("Storage state restored (dry-run rollback)");
-        Ok(())
-    }
-}
-
-/// Storage snapshot for dry-run rollback
-#[derive(Debug, Clone)]
-pub struct StorageSnapshot {
-    contract_address: Address,
-    // Future: Add fields to capture storage state
-    // instance_storage: HashMap<String, Val>,
-    // persistent_storage: HashMap<String, Val>,
-    // temporary_storage: HashMap<String, Val>,
 }

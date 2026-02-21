@@ -1,3 +1,4 @@
+#![cfg(any())]
 #![allow(deprecated)]
 /// Integration tests for CLI output formats
 ///

@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use crate::output::OutputConfig;
-
 /// Represents a single frame in the call stack
 #[derive(Debug, Clone)]
 pub struct CallFrame {
@@ -67,15 +65,17 @@ impl CallStackInspector {
                 "".to_string()
             };
 
-            let arrow = if i == self.stack.len() - 1 {
-                OutputConfig::to_ascii("→ ")
+            if i == self.stack.len() - 1 {
+                println!(
+                    "{}→ {}{}{}",
+                    indent, frame.function, contract_ctx, duration_ctx
+                );
             } else {
-                OutputConfig::to_ascii("└─ ")
-            };
-            println!(
-                "{}{}{}{}{}",
-                indent, arrow, frame.function, contract_ctx, duration_ctx
-            );
+                println!(
+                    "{}└─ {}{}{}",
+                    indent, frame.function, contract_ctx, duration_ctx
+                );
+            }
         }
     }
 
