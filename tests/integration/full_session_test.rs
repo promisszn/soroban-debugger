@@ -15,8 +15,31 @@ fn test_full_debug_session_walkthrough() {
         return;
     }
 
-    // Basic command check
+    // Initialize the command: run counter entry point with instruction stepping
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_soroban-debug"));
-    cmd.arg("run").arg("--help");
-    cmd.assert().success();
+    cmd.arg("run")
+        .arg("--contract")
+        .arg(&wasm_path)
+        .arg("--function")
+        .arg("increment")
+        .arg("--breakpoint")
+        .arg("increment")
+        .arg("--instruction-debug")
+        .arg("--step-instructions");
+
+    // Spawn the command with piped stdin
+    let mut child = cmd.spawn().expect("Failed to spawn soroban-debug");
+    let mut stdin = child.stdin.take().expect("Failed to open stdin");
+
+    // Simulate session:
+    // 1. Step into (s)
+    // 2. View info (i)
+    // 3. Continue to completion (c)
+    writeln!(stdin, "s").unwrap();
+    writeln!(stdin, "i").unwrap();
+    writeln!(stdin, "c").unwrap();
+
+    // Capture output
+    let output = child.wait_with_output().expect("Failed to wait for output");
+    assert!(output.status.success());
 }
