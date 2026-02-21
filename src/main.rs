@@ -73,6 +73,10 @@ fn main() -> Result<()> {
             generate(args.shell, &mut cmd, "soroban-debug", &mut io::stdout());
             Ok(())
         }
+        Commands::Profile(args) => {
+            soroban_debugger::cli::commands::profile(args)?;
+            Ok(())
+        }
     };
 
     if let Err(err) = result {

@@ -71,6 +71,8 @@ pub enum Commands {
     /// Analyze contract and generate gas optimization suggestions
     Optimize(OptimizeArgs),
 
+    /// Profile a single function execution and print hotspots + suggestions
+    Profile(ProfileArgs),
     /// Check compatibility between two contract versions
     UpgradeCheck(UpgradeCheckArgs),
 
@@ -153,6 +155,10 @@ pub struct RunArgs {
     /// Execute contract in dry-run mode: simulate execution without persisting storage changes
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Path to JSON file containing array of argument sets for batch execution
+    #[arg(long)]
+    pub batch_args: Option<PathBuf>,
 }
 
 impl RunArgs {
@@ -289,6 +295,7 @@ pub struct CompletionsArgs {
     pub shell: Shell,
 }
 
+
 /// Arguments for the TUI dashboard subcommand
 #[derive(Parser)]
 pub struct TuiArgs {
@@ -315,4 +322,27 @@ pub struct TuiArgs {
     /// Network snapshot file to load before execution
     #[arg(long)]
     pub network_snapshot: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct ProfileArgs {
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
+
+    /// Function name to execute
+    #[arg(short, long)]
+    pub function: String,
+
+    /// Function arguments as JSON array (e.g., '["arg1", "arg2"]')
+    #[arg(short, long)]
+    pub args: Option<String>,
+
+    /// Output file for the profile report (default: stdout)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Initial storage state as JSON object
+    #[arg(short, long)]
+    pub storage: Option<String>,
 }
