@@ -34,6 +34,10 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
+    /// Suppress ASCII banner on startup
+    #[arg(long, global = true)]
+    pub no_banner: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -199,6 +203,13 @@ impl InteractiveArgs {
     }
 }
 
+
+#[derive(Parser)]
+pub struct CompletionsArgs {
+    /// Shell to generate completions for (bash, zsh, fish, powershell)
+    #[arg(short, long)]
+    pub shell: String,
+}
 
 #[derive(Parser)]
 pub struct InspectArgs {

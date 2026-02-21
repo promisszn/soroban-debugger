@@ -1,7 +1,17 @@
 use anyhow::Result;
 use clap::Parser;
+use is_terminal::IsTerminal;
 use soroban_debugger::cli::{Cli, Commands, Verbosity};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+fn show_banner() {
+    let version = env!("CARGO_PKG_VERSION");
+    println!("╔═══════════════════════════════════════╗");
+    println!("║   SOROBAN DEBUGGER v{:<16}  ║", version);
+    println!("║   Smart Contract Debugging Tool      ║");
+    println!("╚═══════════════════════════════════════╝");
+    println!();
+}
 
 fn initialize_tracing(verbosity: Verbosity) {
     let log_level = verbosity.to_log_level();
@@ -41,42 +51,17 @@ fn initialize_tracing(verbosity: Verbosity) {
 }
 
 fn main() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "soroban_debugger=info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
-    // Parse CLI arguments
-    let mut cli = Cli::parse();
-
-    // Load configuration
-    let config = soroban_debugger::config::Config::load_or_default();
-
-    // Execute command
-    match cli.command {
-        Commands::Run(mut args) => {
-            args.merge_config(&config);
-            soroban_debugger::cli::commands::run(args)?;
-        }
-        Commands::Interactive(mut args) => {
-            args.merge_config(&config);
-            soroban_debugger::cli::commands::interactive(args)?;
-        }
-        _ => {
-            // Other commands don't have merge_config implemented yet or don't need it
-            match cli.command {
-                Commands::Inspect(args) => soroban_debugger::cli::commands::inspect(args)?,
-                Commands::Optimize(args) => soroban_debugger::cli::commands::optimize(args)?,
-                Commands::UpgradeCheck(args) => soroban_debugger::cli::commands::upgrade_check(args)?,
-                Commands::Compare(args) => soroban_debugger::cli::commands::compare(args)?,
-                _ => unreachable!(),
-            }
     let cli = Cli::parse();
     let verbosity = cli.verbosity();
+
+    // Show ASCII banner if conditions are met
+    let should_show_banner = std::io::stdout().is_terminal()
+        && !cli.no_banner
+        && std::env::var("NO_BANNER").is_err();
+    
+    if should_show_banner {
+        show_banner();
+    }
 
     initialize_tracing(verbosity);
 
@@ -90,6 +75,11 @@ fn main() -> Result<()> {
         Commands::UpgradeCheck(args) => {
             soroban_debugger::cli::commands::upgrade_check(args, verbosity)
         }
+        Commands::Completions(_args) => {
+            eprintln!("Completions command not yet implemented");
+            return Ok(());
+        }
+        Commands::Compare(args) => soroban_debugger::cli::commands::compare(args),
     };
 
     if let Err(err) = result {

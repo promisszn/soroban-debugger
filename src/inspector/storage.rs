@@ -471,6 +471,6 @@ mod tests {
         assert_eq!(diff.deleted.len(), 1);
         assert!(diff.added.contains_key("added"));
         assert!(diff.modified.contains_key("modified"));
-        assert!(diff.deleted.contains("deleted"));
+        assert!(diff.deleted.contains(&"deleted".to_string()));
     }
 }

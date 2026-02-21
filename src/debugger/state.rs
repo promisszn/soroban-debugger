@@ -3,7 +3,7 @@ use crate::runtime::instruction::Instruction;
 use crate::inspector::stack::CallStackInspector;
 
 /// Represents the current state of the debugger
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DebugState {
     current_function: Option<String>,
     step_count: usize,
@@ -152,6 +152,8 @@ impl DebugState {
         } else {
             false
         }
+    }
+
     /// Get reference to call stack
     pub fn call_stack(&self) -> &CallStackInspector {
         &self.call_stack
@@ -191,6 +193,5 @@ impl DebugState {
 impl Default for DebugState {
     fn default() -> Self {
         Self::new()
-        self.call_stack.clear();
     }
 }

@@ -157,6 +157,9 @@ impl Formatter {
             s.to_string()
         } else {
             format!("{}{}", s, " ".repeat(width - s.len()))
+        }
+    }
+
     /// Format an informational message in blue.
     pub fn info(message: impl AsRef<str>) -> String {
         Self::apply_color(message.as_ref(), ColorKind::Info)

@@ -1,17 +1,14 @@
-use crate::cli::args::{CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, RunArgs, UpgradeCheckArgs};
 use crate::cli::args::{
-    InspectArgs, InteractiveArgs, OptimizeArgs, RunArgs, UpgradeCheckArgs, Verbosity,
+    CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, RunArgs, UpgradeCheckArgs, Verbosity,
 };
 use crate::debugger::engine::DebuggerEngine;
 use crate::debugger::instruction_pointer::StepMode;
 use crate::logging;
-
 use crate::repeat::RepeatRunner;
 use crate::runtime::executor::ContractExecutor;
 use crate::simulator::SnapshotLoader;
 use crate::ui::formatter::Formatter;
 use crate::ui::tui::DebuggerUI;
-use crate::ui::formatter::Formatter;
 use crate::Result;
 use anyhow::Context;
 use std::fs;
@@ -29,13 +26,11 @@ fn print_warning(message: impl AsRef<str>) {
 }
 
 /// Execute the run command
-pub fn run(args: RunArgs) -> Result<()> {
+pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     if args.dry_run {
         return run_dry_run(&args);
     }
 
-    println!("Loading contract: {:?}", args.contract);
-pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     print_info(format!("Loading contract: {:?}", args.contract));
     logging::log_loading_contract(&args.contract.to_string_lossy());
 
@@ -84,9 +79,6 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     logging::log_execution_start(&args.function, parsed_args.as_deref());
 
     // Create executor
-    let mut executor = ContractExecutor::new(wasm_bytes.clone())?;
-
-    // Set up initial storage if provided
     let mut executor = ContractExecutor::new(wasm_bytes)?;
     if let Some(storage) = initial_storage {
         executor.set_initial_storage(storage)?;
@@ -97,7 +89,6 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     // Enable instruction-level debugging if requested
     if args.instruction_debug {
         println!("Enabling instruction-level debugging...");
-        engine.enable_instruction_debug(&wasm_bytes)?;
         
         // Parse step mode
         let step_mode = match args.step_mode.to_lowercase().as_str() {
@@ -160,21 +151,10 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     if !args.storage_filter.is_empty() {
         let storage_filter = crate::inspector::storage::StorageFilter::new(&args.storage_filter)
             .map_err(|e| anyhow::anyhow!("Invalid storage filter: {}", e))?;
-        println!("\n--- Storage ---");
         
-        // Note: Storage inspection from executor is not yet fully implemented
-        // For now, create an empty inspector to demonstrate the filtering interface
-        let inspector = crate::inspector::storage::StorageInspector::new();
-        // Get storage data from the executor
-        let storage_data = engine.executor().get_storage()
-            .map_err(|e| anyhow::anyhow!("Failed to get storage data: {}", e))?;
-        
-        // Create inspector with storage data
-        let inspector = crate::inspector::StorageInspector::new(&storage_data);
-
         print_info("\n--- Storage ---");
         tracing::info!("Displaying filtered storage");
-        let inspector = crate::inspector::StorageInspector::new();
+        let inspector = crate::inspector::storage::StorageInspector::new();
         inspector.display_filtered(&storage_filter);
         
         println!("(Storage inspection from executor not yet fully implemented)");
@@ -189,11 +169,22 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
 
             if args.show_events {
                 let events = engine.executor().get_events()?;
-                output["events"] = serde_json::to_value(&events).unwrap_or(serde_json::Value::Null);
+                let event_values: Vec<serde_json::Value> = events
+                    .iter()
+                    .map(|e| serde_json::json!({
+                        "contract_id": e.contract_id.as_deref().unwrap_or("<none>"),
+                        "topics": e.topics,
+                        "data": e.data
+                    }))
+                    .collect();
+                output["events"] = serde_json::Value::Array(event_values);
             }
 
             println!("{}", serde_json::to_string_pretty(&output).unwrap());
             return Ok(());
+        }
+    }
+
     if args.show_auth {
         let auth_tree = engine.executor().get_auth_tree()?;
         if args.json {
@@ -390,24 +381,7 @@ pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
         println!("  Exported Functions");
         println!("  {}", "─".repeat(52));
 
-        
         let functions = crate::utils::wasm::parse_functions(&wasm_bytes)?;
-        if functions.is_empty() {
-            println!("  (No exported functions found)");
-        } else {
-            for func in functions {
-                println!("  • {}", func);
-            }
-        }
-    print_info("\nContract Information:");
-    println!("  Size: {} bytes", wasm_bytes.len());
-    logging::log_contract_loaded(wasm_bytes.len());
-
-    if args.functions {
-        print_info("\nExported Functions:");
-        let functions = crate::utils::wasm::parse_functions(&wasm_bytes)?;
-        tracing::info!(count = functions.len(), "Exported functions found");
-
         if functions.is_empty() {
             println!("  (No exported functions found)");
         } else {
@@ -448,26 +422,6 @@ pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
                         println!("  Implementation notes  : {}", impl_notes);
                     }
                 }
-        print_info("\nMetadata:");
-        let metadata = crate::utils::wasm::extract_contract_metadata(&wasm_bytes)?;
-
-        if metadata.is_empty() {
-            println!("  (No embedded metadata found)");
-        } else {
-            if let Some(version) = metadata.contract_version {
-                println!("  Contract version      : {}", version);
-            }
-            if let Some(sdk) = metadata.sdk_version {
-                println!("  Soroban SDK version   : {}", sdk);
-            }
-            if let Some(build_date) = metadata.build_date {
-                println!("  Build date            : {}", build_date);
-            }
-            if let Some(author) = metadata.author {
-                println!("  Author / organization : {}", author);
-            }
-            if let Some(desc) = metadata.description {
-                println!("  Description           : {}", desc);
             }
             Err(e) => {
                 println!("  Error reading metadata: {}", e);
@@ -788,6 +742,11 @@ fn run_instruction_stepping(
                 println!("Unknown command: {}. Type 'help' for available commands.", input);
             }
         }
+    }
+
+    Ok(())
+}
+
 /// Execute the compare command
 pub fn compare(args: CompareArgs) -> Result<()> {
     println!("Loading trace A: {:?}", args.trace_a);

@@ -58,7 +58,7 @@ impl DebuggerUI {
         match parts[0] {
             "s" | "step" => {
                 self.engine.step()?;
-                crate::logging::log_step(self.engine.state().step_count() as u64);
+                crate::logging::log_step(self.engine.state().lock().unwrap().step_count() as u64);
             }
             "c" | "continue" => {
                 self.engine.continue_execution()?;
@@ -71,7 +71,7 @@ impl DebuggerUI {
                 self.storage_inspector.display();
             }
             "stack" => {
-                self.engine.state().call_stack().display();
+                self.engine.state().lock().unwrap().call_stack().display();
             }
             "budget" => {
                 BudgetInspector::display(self.engine.executor().host());
@@ -121,19 +121,9 @@ impl DebuggerUI {
     /// Display current state
     fn inspect(&self) {
         println!("\n=== Current State ===");
-        if let Ok(state) = self.engine.state().lock() {
-            if let Some(func) = state.current_function() {
-                println!("Function: {}", func);
-            } else {
-                println!("Function: (none)");
-            }
-            println!("Steps: {}", state.step_count());
-        } else {
-            println!("Function: (unavailable)");
-            println!("Steps: (unavailable)");
-        let steps = self.engine.state().step_count();
+        let steps = self.engine.state().lock().unwrap().step_count();
         let paused = self.engine.is_paused();
-        if let Some(func) = self.engine.state().current_function() {
+        if let Some(func) = self.engine.state().lock().unwrap().current_function() {
             tracing::info!(
                 function = func,
                 steps = steps,
@@ -146,7 +136,7 @@ impl DebuggerUI {
         println!("Paused: {}", self.engine.is_paused());
 
         println!();
-        self.engine.state().call_stack().display();
+        self.engine.state().lock().unwrap().call_stack().display();
     }
 
     /// Print help message

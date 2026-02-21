@@ -63,3 +63,21 @@ fn test_compare_help_command() {
         .stdout(predicate::str::contains("TRACE_B"))
         .stdout(predicate::str::contains("--output"));
 }
+
+#[test]
+fn test_no_banner_flag() {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_soroban-debug"));
+    cmd.arg("--no-banner").arg("--help");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("SOROBAN DEBUGGER").not());
+}
+
+#[test]
+fn test_no_banner_env_var() {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_soroban-debug"));
+    cmd.env("NO_BANNER", "1").arg("--help");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("SOROBAN DEBUGGER").not());
+}

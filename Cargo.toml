@@ -45,6 +45,8 @@ regex = "1.10"
 toml = "0.8"
 
 colored = "2.0"
+is-terminal = "0.4"
+
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.0"

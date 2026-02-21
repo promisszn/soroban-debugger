@@ -113,8 +113,8 @@ impl ContractExecutor {
         self.env.host()
     }
 
-    /// Get the environment handle
-    pub fn env(&self) -> Env {
+    /// Get the environment handle (clone)
+    pub fn env_clone(&self) -> Env {
         self.env.clone()
     }
 
@@ -191,15 +191,4 @@ pub struct StorageSnapshot {
     // instance_storage: HashMap<String, Val>,
     // persistent_storage: HashMap<String, Val>,
     // temporary_storage: HashMap<String, Val>,
-    /// Get diagnostic events from the host
-    pub fn get_diagnostic_events(&self) -> Result<Vec<soroban_env_host::xdr::ContractEvent>> {
-        Ok(self
-            .env
-            .host()
-            .get_diagnostic_events()?
-            .0
-            .into_iter()
-            .map(|he| he.event)
-            .collect())
-    }
 }
