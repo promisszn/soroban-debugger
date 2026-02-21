@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use soroban_debugger::debugger::breakpoint::BreakpointManager;
-use soroban_debugger::inspector::{BudgetInspector, CallStackInspector, StorageInspector};
+use soroban_debugger::inspector::{CallStackInspector, StorageInspector};
 use soroban_debugger::utils::arguments::ArgumentParser;
 use soroban_sdk::Env;
 use std::fs;
