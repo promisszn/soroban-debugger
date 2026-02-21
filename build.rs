@@ -98,7 +98,7 @@ fn render_recursive(cmd: &clap::Command, out_dir: &Path, prefix: &str) -> std::i
         format!("{}-{}", prefix, cmd.get_name())
     };
 
-    let cmd = cmd.clone().name(name.clone());
+    let cmd = cmd.clone();
     let man = clap_mangen::Man::new(cmd.clone());
     let mut buffer: Vec<u8> = Default::default();
     man.render(&mut buffer)?;

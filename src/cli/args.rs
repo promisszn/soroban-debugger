@@ -272,6 +272,12 @@ impl InteractiveArgs {
 }
 
 #[derive(Parser)]
+pub struct CompletionsArgs {
+    /// Shell to generate completion script for
+    #[arg(value_enum)]
+    pub shell: Shell,
+}
+#[derive(Parser)]
 pub struct InspectArgs {
     /// Path to the contract WASM file
     #[arg(short, long)]
@@ -288,6 +294,10 @@ pub struct InspectArgs {
     /// Show contract metadata
     #[arg(long)]
     pub metadata: bool,
+
+    /// Show cross-contract dependency graph in DOT and Mermaid formats
+    #[arg(long)]
+    pub dependency_graph: bool,
 }
 
 #[derive(Parser)]
@@ -361,13 +371,6 @@ pub struct CompareArgs {
     /// Output file for the comparison report (default: stdout)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
-}
-
-#[derive(Parser)]
-pub struct CompletionsArgs {
-    /// Shell to generate completion script for
-    #[arg(value_enum)]
-    pub shell: Shell,
 }
 
 /// Arguments for the TUI dashboard subcommand
