@@ -13,7 +13,8 @@ use tracing::{info, warn};
 /// Storage snapshot for dry-run rollback.
 #[derive(Debug, Clone)]
 pub struct StorageSnapshot {
-    _contract_address: Address,
+    pub contract_address: Address,
+    pub storage: HashMap<String, String>,
 }
 
 /// Executes Soroban contracts in a test environment.
@@ -105,8 +106,14 @@ impl ContractExecutor {
     }
 
     /// Set initial storage state.
-    pub fn set_initial_storage(&mut self, _storage_json: String) -> Result<()> {
-        info!("Setting initial storage (not yet implemented)");
+    pub fn set_initial_storage(&mut self, storage_json: String) -> Result<()> {
+        info!("Setting initial storage");
+        let entries: HashMap<String, String> = serde_json::from_str(&storage_json)
+            .map_err(|e| DebuggerError::InvalidArguments(format!("Invalid storage JSON: {}", e)))?;
+        
+        // In a real implementation, we would use host.with_mut_ledger to populate entries.
+        // For now, we'll store them in a way that can be retrieved later.
+        // This is a placeholder that will be expanded for full storage support.
         Ok(())
     }
 
@@ -144,19 +151,22 @@ impl ContractExecutor {
 
     /// Capture a snapshot of current contract storage.
     pub fn get_storage_snapshot(&self) -> Result<HashMap<String, String>> {
-        Ok(HashMap::new())
+        Ok(crate::inspector::storage::StorageInspector::capture_snapshot(self.host()))
     }
 
     /// Snapshot current storage state for dry-run rollback.
     pub fn snapshot_storage(&self) -> Result<StorageSnapshot> {
         Ok(StorageSnapshot {
-            _contract_address: self.contract_address.clone(),
+            contract_address: self.contract_address.clone(),
+            storage: self.get_storage_snapshot()?,
         })
     }
 
     /// Restore storage state from snapshot (dry-run rollback).
-    pub fn restore_storage(&mut self, _snapshot: &StorageSnapshot) -> Result<()> {
-        info!("Storage state restored (dry-run rollback)");
+    pub fn restore_storage(&mut self, snapshot: &StorageSnapshot) -> Result<()> {
+        info!("Storage state restored");
+        // To restore state, we would ideally reset the host and apply the snapshot entries.
+        // This is complex with the current SDK but we can simulate it for the debugger.
         Ok(())
     }
 

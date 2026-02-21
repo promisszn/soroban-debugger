@@ -46,6 +46,7 @@ pub enum ActivePane {
     CallStack,
     Storage,
     Budget,
+    Timeline,
     Log,
 }
 
@@ -54,7 +55,8 @@ impl ActivePane {
         match self {
             ActivePane::CallStack => ActivePane::Storage,
             ActivePane::Storage => ActivePane::Budget,
-            ActivePane::Budget => ActivePane::Log,
+            ActivePane::Budget => ActivePane::Timeline,
+            ActivePane::Timeline => ActivePane::Log,
             ActivePane::Log => ActivePane::CallStack,
         }
     }
@@ -64,7 +66,8 @@ impl ActivePane {
             ActivePane::CallStack => ActivePane::Log,
             ActivePane::Storage => ActivePane::CallStack,
             ActivePane::Budget => ActivePane::Storage,
-            ActivePane::Log => ActivePane::Budget,
+            ActivePane::Timeline => ActivePane::Budget,
+            ActivePane::Log => ActivePane::Timeline,
         }
     }
 
@@ -73,6 +76,7 @@ impl ActivePane {
             ActivePane::CallStack => "Call Stack",
             ActivePane::Storage => "Storage",
             ActivePane::Budget => "Budget Meters",
+            ActivePane::Timeline => "Timeline",
             ActivePane::Log => "Execution Log",
         }
     }
@@ -101,6 +105,9 @@ pub struct DashboardApp {
     log_entries: Vec<LogEntry>,
     log_scroll: usize,
     log_scroll_state: ScrollbarState,
+
+    // Timeline pane
+    timeline_state: ListState,
 
     // Misc
     last_refresh: Instant,
@@ -167,6 +174,7 @@ impl DashboardApp {
             log_entries: Vec::new(),
             log_scroll: 0,
             log_scroll_state,
+            timeline_state: ListState::default(),
             last_refresh: Instant::now(),
             step_count: 0,
             function_name,
@@ -279,15 +287,44 @@ impl DashboardApp {
     fn do_step(&mut self) {
         match self.engine.step() {
             Ok(()) => {
-                self.step_count += 1;
                 self.push_log(
                     LogLevel::Step,
-                    format!("Step #{} completed", self.step_count),
+                    format!("Step #{} completed", self.engine.state().lock().unwrap().step_count()),
                 );
             }
             Err(e) => {
                 self.push_log(LogLevel::Error, format!("Step failed: {}", e));
                 self.status_message = Some((format!("Step error: {}", e), StatusKind::Error));
+            }
+        }
+        self.refresh_state();
+    }
+
+    // ── Step Back action ─────────────────────────────────────────────────────
+    fn do_step_back(&mut self) {
+        match self.engine.step_back() {
+            Ok(stepped) => {
+                if stepped {
+                    self.push_log(LogLevel::Step, "Step back completed".to_string());
+                } else {
+                    self.push_log(LogLevel::Warn, "At earliest point in history".to_string());
+                }
+            }
+            Err(e) => {
+                self.push_log(LogLevel::Error, format!("Step back failed: {}", e));
+            }
+        }
+        self.refresh_state();
+    }
+
+    // ── Continue Back action ─────────────────────────────────────────────────
+    fn do_continue_back(&mut self) {
+        match self.engine.continue_back() {
+            Ok(()) => {
+                self.push_log(LogLevel::Step, "Continued back to breakpoint or beginning".to_string());
+            }
+            Err(e) => {
+                self.push_log(LogLevel::Error, format!("Continue back failed: {}", e));
             }
         }
         self.refresh_state();
@@ -335,6 +372,12 @@ impl DashboardApp {
                 self.log_scroll_state = self.log_scroll_state.position(self.log_scroll);
             }
             ActivePane::Budget => {}
+            ActivePane::Timeline => {
+                let len = self.engine.get_timeline().len();
+                if len == 0 { return; }
+                let sel = self.timeline_state.selected().unwrap_or(0);
+                self.timeline_state.select(Some((sel + 1).min(len - 1)));
+            }
         }
     }
 
@@ -355,6 +398,12 @@ impl DashboardApp {
                 self.log_scroll_state = self.log_scroll_state.position(self.log_scroll);
             }
             ActivePane::Budget => {}
+            ActivePane::Timeline => {
+                let len = self.engine.get_timeline().len();
+                if len == 0 { return; }
+                let sel = self.timeline_state.selected().unwrap_or(0);
+                self.timeline_state.select(Some(sel.saturating_sub(1)));
+            }
         }
     }
 }
@@ -428,7 +477,8 @@ fn run_app<B: ratatui::backend::Backend>(
                     KeyCode::Char('1') => app.active_pane = ActivePane::CallStack,
                     KeyCode::Char('2') => app.active_pane = ActivePane::Storage,
                     KeyCode::Char('3') => app.active_pane = ActivePane::Budget,
-                    KeyCode::Char('4') => app.active_pane = ActivePane::Log,
+                    KeyCode::Char('4') => app.active_pane = ActivePane::Timeline,
+                    KeyCode::Char('5') => app.active_pane = ActivePane::Log,
 
                     // ── Scroll ────────────────────────────────────
                     KeyCode::Down | KeyCode::Char('j') => {
@@ -444,6 +494,12 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     KeyCode::Char('c') => {
                         app.do_continue();
+                    }
+                    KeyCode::Char('b') | KeyCode::Char('B') | KeyCode::Backspace => {
+                        app.do_step_back();
+                    }
+                    KeyCode::Char('l') | KeyCode::Char('L') => {
+                        app.do_continue_back();
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
                         app.refresh_state();
@@ -552,7 +608,11 @@ fn render_body(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
 
     let left_column = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+            Constraint::Percentage(34),
+        ])
         .split(columns[0]);
 
     let right_column = Layout::default()
@@ -562,6 +622,7 @@ fn render_body(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
 
     render_call_stack(f, app, left_column[0]);
     render_budget(f, app, left_column[1]);
+    render_timeline(f, app, left_column[2]);
     render_storage(f, app, right_column[0]);
     render_log(f, app, right_column[1]);
 }
@@ -828,6 +889,79 @@ fn render_budget(f: &mut Frame, app: &DashboardApp, area: Rect) {
     }
 }
 
+// ─── Timeline pane ─────────────────────────────────────────────────────────
+fn render_timeline(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
+    let is_active = app.active_pane == ActivePane::Timeline;
+    let timeline = app.engine.get_timeline();
+    let count = timeline.len();
+    let current_pos = timeline.current_pos();
+
+    let block = pane_block(&format!("  Timeline ({} snapshots)", count), "4", is_active);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if count == 0 {
+        let msg = Paragraph::new(Line::from(vec![Span::styled(
+            "  (no history recorded yet — step to capture state)",
+            Style::default().fg(COLOR_TEXT_DIM),
+        )]))
+        .style(Style::default().bg(COLOR_SURFACE));
+        f.render_widget(msg, inner);
+        return;
+    }
+
+    let items: Vec<ListItem> = timeline
+        .get_history()
+        .iter()
+        .enumerate()
+        .map(|(i, snap)| {
+            let is_current = i == current_pos;
+            let style = if is_current {
+                Style::default()
+                    .fg(COLOR_GREEN)
+                    .add_modifier(Modifier::BOLD)
+                    .bg(Color::Rgb(25, 45, 35))
+            } else {
+                Style::default().fg(COLOR_TEXT)
+            };
+
+            let prefix = if is_current { "▶ " } else { "  " };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{}Snapshot {:>3}", prefix, i), style),
+                Span::styled(
+                    format!(" [Step {}]", snap.step),
+                    Style::default().fg(COLOR_CYAN),
+                ),
+                Span::styled(
+                    format!(" fn: {}", shorten_func(&snap.function)),
+                    Style::default().fg(COLOR_PURPLE),
+                ),
+                Span::styled(
+                    format!(" [IP:{}]", snap.instruction_index),
+                    Style::default().fg(COLOR_TEXT_DIM),
+                ),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items).highlight_style(
+        Style::default()
+            .bg(Color::Rgb(30, 40, 50))
+            .add_modifier(Modifier::BOLD),
+    );
+
+    f.render_stateful_widget(list, inner, &mut app.timeline_state);
+}
+
+fn shorten_func(name: &str) -> String {
+    if name.len() > 15 {
+        format!("{}…", &name[..14])
+    } else {
+        name.to_string()
+    }
+}
+
+
 fn build_sparkline(history: &VecDeque<f64>, prefix: &str, color: Color) -> Line<'static> {
     let bar_chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     let spark: String = history
@@ -959,7 +1093,7 @@ fn render_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
             Style::default().fg(msg_color).bg(COLOR_SURFACE),
         ),
         Span::styled(
-            " │ Tab=next pane  ↑↓/jk=scroll  s=step  c=continue  r=refresh  q=quit ",
+            " │ s=step  b=back  c=cont  l=cont-back  Tab=pane  q=quit ",
             Style::default().fg(COLOR_TEXT_DIM).bg(COLOR_SURFACE),
         ),
     ]);
@@ -1008,7 +1142,9 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )]),
         bind("s / S", "Step (one instruction)"),
+        bind("b / Backspace", "Step BACK in time"),
         bind("c", "Continue execution"),
+        bind("l / L", "Continue BACKWARDS"),
         bind("r / R", "Refresh state manually"),
         Line::from(""),
         Line::from(vec![Span::styled(

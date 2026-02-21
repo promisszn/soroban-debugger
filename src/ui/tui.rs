@@ -65,6 +65,42 @@ impl DebuggerUI {
                 self.engine.continue_execution()?;
                 tracing::info!("Execution continuing");
             }
+            "sb" | "step-back" => {
+                let stepped = self.engine.step_back()?;
+                if stepped {
+                    println!("Stepped back");
+                    self.inspect();
+                } else {
+                    println!("Already at beginning of history");
+                }
+            }
+            "cb" | "continue-back" => {
+                self.engine.continue_back()?;
+                println!("Continued back");
+                self.inspect();
+            }
+            "goto" => {
+                if parts.len() < 2 {
+                    println!("Usage: goto <step>");
+                } else if let Ok(step) = parts[1].parse::<usize>() {
+                    self.engine.goto_step(step)?;
+                    println!("Jumped to step {}", step);
+                    self.inspect();
+                } else {
+                    println!("Invalid step number");
+                }
+            }
+            "timeline" | "tl" => {
+                let timeline = self.engine.get_timeline();
+                println!("\n=== Execution Timeline ===");
+                for (i, snap) in timeline.get_history().iter().enumerate() {
+                    let current = if i == timeline.current_pos() { "▶" } else { " " };
+                    println!(
+                        "{} {:>3}: Step {:>3} | fn: {:<15} | IP: {:>3}",
+                        current, i, snap.step, snap.function, snap.instruction_index
+                    );
+                }
+            }
             "i" | "inspect" => {
                 self.inspect();
             }
@@ -137,7 +173,11 @@ impl DebuggerUI {
     fn print_help(&self) {
         println!("Interactive debugger commands:");
         println!("  step | s           Step execution");
+        println!("  step-back | sb     Step backward in time");
         println!("  continue | c       Continue execution");
+        println!("  continue-back | cb Continue execution backwards");
+        println!("  goto <step>        Jump to specific step");
+        println!("  timeline | tl      Show execution timeline");
         println!("  inspect | i        Show current state");
         println!("  storage            Show tracked storage view");
         println!("  stack              Show call stack");
