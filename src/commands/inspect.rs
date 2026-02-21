@@ -3,6 +3,7 @@
 
 use std::{fs, path::Path};
 
+use crate::output::OutputConfig;
 use crate::{
     utils::wasm::{extract_contract_metadata, get_module_info, parse_functions},
     InspectArgs, Result,
@@ -35,7 +36,7 @@ fn print_report(path: &Path, wasm_bytes: &[u8]) -> Result<()> {
     let functions = parse_functions(wasm_bytes)?;
     let metadata  = extract_contract_metadata(wasm_bytes)?;
 
-    let heavy = "═".repeat(BAR_WIDTH);
+    let heavy = OutputConfig::double_rule_line(BAR_WIDTH);
 
     // ── header ────────────────────────────────────────────────────────────────
     println!("{heavy}");
@@ -59,7 +60,7 @@ fn print_report(path: &Path, wasm_bytes: &[u8]) -> Result<()> {
         println!("  (none)");
     } else {
         for name in &functions {
-            println!("  • {name}");
+            println!("  {} {name}", OutputConfig::to_ascii("•"));
         }
     }
     println!();
@@ -67,7 +68,7 @@ fn print_report(path: &Path, wasm_bytes: &[u8]) -> Result<()> {
     // ── contract metadata ─────────────────────────────────────────────────────
     section_header("Contract Metadata");
     if metadata.is_empty() {
-        println!("  ⚠  No metadata section embedded in this contract.");
+        println!("  {}  No metadata section embedded in this contract.", OutputConfig::to_ascii("⚠"));
     } else {
         print_field("Contract Version", &metadata.contract_version);
         print_field("SDK Version",      &metadata.sdk_version);
@@ -84,9 +85,9 @@ fn print_report(path: &Path, wasm_bytes: &[u8]) -> Result<()> {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 fn section_header(title: &str) {
-    // "─── Title ──────" where total width equals BAR_WIDTH.
+    // "─── Title ──────" (or ASCII equivalent when --no-unicode)
     let fill = BAR_WIDTH.saturating_sub(title.len() + 5);
-    println!("─── {title} {}", "─".repeat(fill));
+    println!("{} {title} {}", OutputConfig::to_ascii("─── "), OutputConfig::rule_line(fill));
 }
 
 /// Print a labelled row only when the value is `Some`.

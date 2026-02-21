@@ -343,6 +343,24 @@ show_events = true
 | `breakpoints` | `debug.breakpoints` | List of function names to set as breakpoints |
 | `show_events` | `output.show_events` | Whether to show events by default (`true`/`false`) |
 
+## Accessibility
+
+The CLI supports **screen-reader compatible** and **low-complexity** output so that all information is conveyed via text, not only color or Unicode symbols.
+
+- **`NO_COLOR`**  
+  If the `NO_COLOR` environment variable is set and not empty, the debugger disables all ANSI color output. Status is then shown with text labels (e.g. `[PASS]`, `[FAIL]`, `[INFO]`, `[WARN]`) instead of colored text.
+
+- **`--no-unicode`**  
+  Use ASCII-only output: no Unicode box-drawing characters (e.g. `┌`, `─`, `│`) or symbols. Box-drawing is replaced with `+`, `-`, `|`; bullets and arrows use `*` and `>`. Spinners are replaced with static text such as `[WORKING...]`.
+
+**Example (screen reader friendly):**
+
+```bash
+NO_COLOR=1 soroban-debug run --contract app.wasm --function main --no-unicode
+```
+
+For best compatibility with screen readers, set both `NO_COLOR` and use `--no-unicode`.
+
 ## Use Cases
 
 ### Debugging Failed Transactions
