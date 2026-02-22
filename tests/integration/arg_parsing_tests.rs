@@ -245,3 +245,51 @@ fn test_empty_string_typed() {
     let result = parser.parse_args_string(r#"[{"type": "string", "value": ""}]"#);
     assert!(result.is_ok());
 }
+
+#[test]
+fn test_parse_typed_option_null_maps_to_none() {
+    let parser = create_parser();
+    let env = Env::default();
+
+    let parsed = parser
+        .parse_args_string(r#"[{"type": "option", "value": null}]"#)
+        .expect("option none should parse");
+
+    let value: Option<i128> = soroban_sdk::TryFromVal::try_from_val(&env, &parsed[0])
+        .expect("val should decode to Option<i128>");
+    assert_eq!(value, None);
+}
+
+#[test]
+fn test_parse_typed_option_non_null_maps_to_some() {
+    let parser = create_parser();
+    let env = Env::default();
+
+    let parsed = parser
+        .parse_args_string(r#"[{"type": "option", "value": 42}]"#)
+        .expect("option some should parse");
+
+    let value: Option<i128> = soroban_sdk::TryFromVal::try_from_val(&env, &parsed[0])
+        .expect("val should decode to Option<i128>");
+    assert_eq!(value, Some(42));
+}
+
+#[test]
+fn test_parse_typed_tuple_fixed_length_array() {
+    let parser = create_parser();
+    let result =
+        parser.parse_args_string(r#"[{"type": "tuple", "value": [1, "hello"], "arity": 2}]"#);
+    assert!(result.is_ok(), "tuple should parse: {:?}", result.err());
+}
+
+#[test]
+fn test_parse_typed_tuple_wrong_arity_has_clear_error() {
+    let parser = create_parser();
+    let result = parser.parse_args_string(r#"[{"type": "tuple", "value": [1, 2, 3], "arity": 2}]"#);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Tuple arity mismatch: expected 2, got 3"),
+        "unexpected error: {err}"
+    );
+}
