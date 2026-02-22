@@ -1,5 +1,5 @@
 use crate::cli::args::{
-    AnalyzeArgs, CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RemoteArgs,
+    AnalyzeArgs, CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RemoteArgs, ReplayArgs,
     RunArgs, ServerArgs, SymbolicArgs, TuiArgs, UpgradeCheckArgs, Verbosity,
 };
 use crate::debugger::engine::DebuggerEngine;
@@ -1133,6 +1133,227 @@ pub fn compare(args: CompareArgs) -> Result<()> {
         print_success(format!("Comparison report written to: {:?}", output_path));
     } else {
         println!("{}", rendered);
+    }
+
+    Ok(())
+}
+
+/// Execute the replay command.
+pub fn replay(args: ReplayArgs, verbosity: Verbosity) -> Result<()> {
+    print_info(format!("Loading trace file: {:?}", args.trace_file));
+    let original_trace = crate::compare::ExecutionTrace::from_file(&args.trace_file)?;
+
+    // Determine which contract to use
+    let contract_path = if let Some(path) = &args.contract {
+        path.clone()
+    } else if let Some(contract_str) = &original_trace.contract {
+        std::path::PathBuf::from(contract_str)
+    } else {
+        return Err(DebuggerError::ExecutionError(
+            "No contract path specified and trace file does not contain contract path".to_string(),
+        )
+        .into());
+    };
+
+    print_info(format!("Loading contract: {:?}", contract_path));
+    let wasm_bytes = fs::read(&contract_path).map_err(|e| {
+        DebuggerError::WasmLoadError(format!(
+            "Failed to read WASM file at {:?}: {}",
+            contract_path, e
+        ))
+    })?;
+
+    print_success(format!(
+        "Contract loaded successfully ({} bytes)",
+        wasm_bytes.len()
+    ));
+
+    // Extract function and args from trace
+    let function = original_trace.function.as_ref().ok_or_else(|| {
+        DebuggerError::ExecutionError("Trace file does not contain function name".to_string())
+    })?;
+
+    let args_str = original_trace.args.as_deref();
+
+    // Determine how many steps to replay
+    let replay_steps = args.replay_until.unwrap_or(usize::MAX);
+    let is_partial_replay = args.replay_until.is_some();
+
+    if is_partial_replay {
+        print_info(format!("Replaying up to step {}", replay_steps));
+    } else {
+        print_info("Replaying full execution");
+    }
+
+    print_info(format!("Function: {}", function));
+    if let Some(a) = args_str {
+        print_info(format!("Arguments: {}", a));
+    }
+
+    // Set up initial storage from trace
+    let initial_storage = if !original_trace.storage.is_empty() {
+        let storage_json = serde_json::to_string(&original_trace.storage).map_err(|e| {
+            DebuggerError::StorageError(format!("Failed to serialize trace storage: {}", e))
+        })?;
+        Some(storage_json)
+    } else {
+        None
+    };
+
+    // Execute the contract
+    print_info("\n--- Replaying Execution ---\n");
+    let mut executor = ContractExecutor::new(wasm_bytes)?;
+
+    if let Some(storage) = initial_storage {
+        executor.set_initial_storage(storage)?;
+    }
+
+    let mut engine = DebuggerEngine::new(executor, vec![]);
+
+    logging::log_execution_start(function, args_str);
+    let replayed_result = engine.execute(function, args_str)?;
+
+    print_success("\n--- Replay Complete ---\n");
+    print_success(format!("Replayed Result: {:?}", replayed_result));
+    logging::log_execution_complete(&replayed_result);
+
+    // Compare results
+    print_info("\n--- Comparison ---");
+
+    let original_return_str = original_trace
+        .return_value
+        .as_ref()
+        .map(|v| serde_json::to_string(v).unwrap_or_default())
+        .unwrap_or_default();
+
+    let results_match = replayed_result.trim() == original_return_str.trim()
+        || format!("\"{replayed_result}\"") == original_return_str;
+
+    if results_match {
+        print_success("✓ Results match! Replayed execution produced the same output.");
+    } else {
+        print_warning("✗ Results differ!");
+        print_info(format!("  Original: {}", original_return_str));
+        print_info(format!("  Replayed: {}", replayed_result));
+    }
+
+    // Budget comparison
+    if let Some(original_budget) = &original_trace.budget {
+        let host = engine.executor().host();
+        let replayed_budget = crate::inspector::budget::BudgetInspector::get_cpu_usage(host);
+
+        print_info("\n--- Budget Comparison ---");
+        print_info(format!(
+            "  Original CPU: {} instructions",
+            original_budget.cpu_instructions
+        ));
+        print_info(format!(
+            "  Replayed CPU: {} instructions",
+            replayed_budget.cpu_instructions
+        ));
+
+        let cpu_diff =
+            replayed_budget.cpu_instructions as i64 - original_budget.cpu_instructions as i64;
+
+        if cpu_diff == 0 {
+            print_success("  CPU usage matches exactly ✓");
+        } else if cpu_diff > 0 {
+            print_warning(format!("  CPU increased by {} instructions", cpu_diff));
+        } else {
+            print_success(format!("  CPU decreased by {} instructions", -cpu_diff));
+        }
+
+        print_info(format!(
+            "  Original Memory: {} bytes",
+            original_budget.memory_bytes
+        ));
+        print_info(format!(
+            "  Replayed Memory: {} bytes",
+            replayed_budget.memory_bytes
+        ));
+
+        let mem_diff = replayed_budget.memory_bytes as i64 - original_budget.memory_bytes as i64;
+
+        if mem_diff == 0 {
+            print_success("  Memory usage matches exactly ✓");
+        } else if mem_diff > 0 {
+            print_warning(format!("  Memory increased by {} bytes", mem_diff));
+        } else {
+            print_success(format!("  Memory decreased by {} bytes", -mem_diff));
+        }
+    }
+
+    // Generate detailed report if output file specified
+    if let Some(output_path) = &args.output {
+        let mut report = String::new();
+        report.push_str("# Execution Replay Report\n\n");
+        report.push_str(&format!("**Trace File:** {:?}\n", args.trace_file));
+        report.push_str(&format!("**Contract:** {:?}\n", contract_path));
+        report.push_str(&format!("**Function:** {}\n", function));
+        if let Some(a) = args_str {
+            report.push_str(&format!("**Arguments:** {}\n", a));
+        }
+        report.push_str("\n## Results\n\n");
+        report.push_str(&format!(
+            "**Original Return Value:**\n```\n{}\n```\n\n",
+            original_return_str
+        ));
+        report.push_str(&format!(
+            "**Replayed Return Value:**\n```\n{}\n```\n\n",
+            replayed_result
+        ));
+
+        if results_match {
+            report.push_str("✓ **Results match**\n\n");
+        } else {
+            report.push_str("✗ **Results differ**\n\n");
+        }
+
+        if let Some(original_budget) = &original_trace.budget {
+            let host = engine.executor().host();
+            let replayed_budget = crate::inspector::budget::BudgetInspector::get_cpu_usage(host);
+
+            report.push_str("## Budget Comparison\n\n");
+            report.push_str("| Metric | Original | Replayed | Difference |\n");
+            report.push_str("|--------|----------|----------|------------|\n");
+            report.push_str(&format!(
+                "| CPU Instructions | {} | {} | {} |\n",
+                original_budget.cpu_instructions,
+                replayed_budget.cpu_instructions,
+                replayed_budget.cpu_instructions as i64 - original_budget.cpu_instructions as i64
+            ));
+            report.push_str(&format!(
+                "| Memory Bytes | {} | {} | {} |\n",
+                original_budget.memory_bytes,
+                replayed_budget.memory_bytes,
+                replayed_budget.memory_bytes as i64 - original_budget.memory_bytes as i64
+            ));
+        }
+
+        fs::write(output_path, &report).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to write report to {:?}: {}",
+                output_path, e
+            ))
+        })?;
+        print_success(format!("\nReplay report written to: {:?}", output_path));
+    }
+
+    if verbosity == Verbosity::Verbose {
+        print_info("\n--- Call Sequence (Original) ---");
+        for (i, call) in original_trace.call_sequence.iter().enumerate() {
+            let indent = "  ".repeat(call.depth as usize);
+            if let Some(args) = &call.args {
+                print_info(format!("{}{}. {} ({})", indent, i, call.function, args));
+            } else {
+                print_info(format!("{}{}. {}", indent, i, call.function));
+            }
+
+            if is_partial_replay && i >= replay_steps {
+                print_warning(format!("{}... (stopped at step {})", indent, replay_steps));
+                break;
+            }
+        }
     }
 
     Ok(())

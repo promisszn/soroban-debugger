@@ -99,6 +99,9 @@ pub enum Commands {
     /// Compare two execution trace JSON files side-by-side
     Compare(CompareArgs),
 
+    /// Replay execution from a previously exported trace file
+    Replay(ReplayArgs),
+
     /// Run symbolic execution to explore contract input space
     Symbolic(SymbolicArgs),
 
@@ -473,6 +476,29 @@ pub struct SymbolicArgs {
     /// Output file for the scenario TOML
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct ReplayArgs {
+    /// Path to the trace JSON file to replay
+    #[arg(value_name = "TRACE_FILE")]
+    pub trace_file: PathBuf,
+
+    /// Path to the contract WASM file (optional, defaults to trace file's contract path)
+    #[arg(short, long)]
+    pub contract: Option<PathBuf>,
+
+    /// Stop replay at step N (0-based index into call sequence)
+    #[arg(long)]
+    pub replay_until: Option<usize>,
+
+    /// Output file for the diff report (default: stdout)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Show verbose output during replay
+    #[arg(short, long)]
+    pub verbose: bool,
 }
 
 #[derive(Parser)]

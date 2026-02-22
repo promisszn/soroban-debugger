@@ -133,6 +133,7 @@ fn main() -> miette::Result<()> {
             soroban_debugger::cli::commands::upgrade_check(args, verbosity)
         }
         Some(Commands::Compare(args)) => soroban_debugger::cli::commands::compare(args),
+        Some(Commands::Replay(args)) => soroban_debugger::cli::commands::replay(args, verbosity),
         Some(Commands::Completions(args)) => {
             let mut cmd = Cli::command();
             generate(args.shell, &mut cmd, "soroban-debug", &mut io::stdout());
