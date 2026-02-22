@@ -438,6 +438,14 @@ pub struct FunctionSignature {
     pub return_type: Option<String>,
 }
 
+/// A custom error definition extracted from a contract spec.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CustomError {
+    pub code: u32,
+    pub name: String,
+    pub doc: String,
+}
+
 /// Convert an XDR `ScSpecTypeDef` into a human-readable type string.
 fn spec_type_to_string(ty: &stellar_xdr::curr::ScSpecTypeDef) -> String {
     use stellar_xdr::curr::ScSpecTypeDef as T;
@@ -550,6 +558,52 @@ pub fn parse_function_signatures(wasm_bytes: &[u8]) -> Result<Vec<FunctionSignat
     }
 
     Ok(signatures)
+}
+
+/// Parse custom error definitions from the WASM `contractspecv0` custom section.
+pub fn parse_custom_errors(wasm_bytes: &[u8]) -> Result<Vec<CustomError>> {
+    use stellar_xdr::curr::{Limited, Limits, ReadXdr, ScSpecEntry};
+
+    let mut errors = Vec::new();
+    let parser = Parser::new(0);
+
+    for payload in parser.parse_all(wasm_bytes) {
+        let Payload::CustomSection(reader) = payload
+            .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?
+        else {
+            continue;
+        };
+
+        if reader.name() != "contractspecv0" {
+            continue;
+        }
+
+        let data = reader.data();
+        let cursor = std::io::Cursor::new(data);
+        let mut limited = Limited::new(cursor, Limits::none());
+
+        loop {
+            match ScSpecEntry::read_xdr(&mut limited) {
+                Ok(ScSpecEntry::UdtErrorEnumV0(err_enum)) => {
+                    for case in err_enum.cases.iter() {
+                        errors.push(CustomError {
+                            code: case.value,
+                            name: stringm_to_string(case.name.as_slice()),
+                            doc: stringm_to_string(case.doc.as_slice()),
+                        });
+                    }
+                }
+                Ok(_) => {
+                    // Other spec entries — skip
+                }
+                Err(_) => break, // end of section or corrupt data
+            }
+        }
+
+        break;
+    }
+
+    Ok(errors)
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -850,5 +904,43 @@ implementation_notes=Line-based format
             ..Default::default()
         };
         assert!(!meta.is_empty());
+    }
+
+    // ── error extraction tests ────────────────────────────────────────────────
+
+    #[test]
+    fn extract_custom_errors() {
+        use stellar_xdr::curr::{ScSpecEntry, ScSpecUdtErrorEnumV0, ScSpecUdtErrorEnumCaseV0, StringM, WriteXdr};
+        
+        let case1 = ScSpecUdtErrorEnumCaseV0 {
+            doc: StringM::try_from("My Error 1".as_bytes().to_vec()).unwrap(),
+            name: StringM::try_from("ErrorOne".as_bytes().to_vec()).unwrap(),
+            value: 100,
+        };
+        let case2 = ScSpecUdtErrorEnumCaseV0 {
+            doc: StringM::try_from("My Error 2".as_bytes().to_vec()).unwrap(),
+            name: StringM::try_from("ErrorTwo".as_bytes().to_vec()).unwrap(),
+            value: 101,
+        };
+        let err_enum = ScSpecUdtErrorEnumV0 {
+            doc: StringM::try_from("".as_bytes().to_vec()).unwrap(),
+            lib: StringM::try_from("".as_bytes().to_vec()).unwrap(),
+            name: StringM::try_from("MyErrorType".as_bytes().to_vec()).unwrap(),
+            cases: vec![case1, case2].try_into().unwrap(),
+        };
+
+        let entry = ScSpecEntry::UdtErrorEnumV0(err_enum);
+        let payload = entry.to_xdr(stellar_xdr::curr::Limits::none()).unwrap();
+
+        let wasm = make_custom_section_wasm("contractspecv0", &payload);
+
+        let errors = parse_custom_errors(&wasm).expect("parsing should succeed");
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0].code, 100);
+        assert_eq!(errors[0].name, "ErrorOne");
+        assert_eq!(errors[0].doc, "My Error 1");
+        assert_eq!(errors[1].code, 101);
+        assert_eq!(errors[1].name, "ErrorTwo");
+        assert_eq!(errors[1].doc, "My Error 2");
     }
 }
