@@ -89,6 +89,7 @@ impl StakingContract {
             .get(&DataKey::StakeAmount(staker.clone()))
             .unwrap_or(0);
 
+    let new_total = current.saturating_add(amount);
         let new_total = current + amount;
 
         env.storage()
@@ -109,6 +110,7 @@ impl StakingContract {
             .unwrap_or(0);
         env.storage()
             .instance()
+           .set(&DataKey::TotalStaked, &global.saturating_add(amount));
             .set(&DataKey::TotalStaked, &(global + amount));
 
         env.events()

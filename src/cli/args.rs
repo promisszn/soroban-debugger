@@ -1,5 +1,9 @@
 use crate::config::Config;
+use clap::{Parser, Subcommand, ValueEnum};
 use clap::{Parser, Subcommand};
+
+use clap::{Parser, Subcommand};
+
 use clap_complete::Shell;
 use std::path::PathBuf;
 
@@ -10,6 +14,22 @@ pub enum Verbosity {
     Normal,
     Verbose,
 }
+
+/// CLI output format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum OutputFormat {
+    #[default]
+    Pretty,
+    Json,
+}
+
+/// Output format for command results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum OutputFormat {
+    Pretty,
+    Json,
+}
+
 
 impl Verbosity {
     /// Convert verbosity to log level string for RUST_LOG
@@ -30,6 +50,13 @@ pub struct Cli {
     /// Suppress non-essential output (errors and return value only)
     #[arg(short, long, global = true)]
     pub quiet: bool,
+
+    /// Show verbose output including internal details
+    #[arg(short, long, global = true)]
+    pub verbose: bool,
+
+    /// Show historical budget trend visualization
+ pub struct RunArgs {
 
     /// Show verbose output including internal details
     #[arg(short, long, global = true)]
@@ -135,6 +162,7 @@ pub struct RunArgs {
     /// Function arguments as JSON array (e.g., '["arg1", "arg2"]')
     #[arg(short, long)]
     pub args: Option<String>,
+ dd5a24aa2a5cb2a82c962d42f6b3fa948882f7fd
 
     /// Initial storage state as JSON object
     #[arg(short, long)]
@@ -159,6 +187,11 @@ pub struct RunArgs {
     /// Output format (text, json)
     #[arg(long)]
     pub format: Option<String>,
+
+    /// Output mode for command result rendering (pretty, json)
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Pretty)]
+    pub output_format: OutputFormat,
+
 
     /// Show contract events emitted during execution
     #[arg(long)]
@@ -185,6 +218,7 @@ pub struct RunArgs {
     pub mock: Vec<String>,
 
     /// Filter storage output by key pattern (repeatable). Supports:
+ pub struct RunArgs {
     ///   prefix*       — match keys starting with prefix
     ///   re:<regex>    — match keys by regex
     ///   exact_key     — match key exactly
@@ -223,6 +257,7 @@ pub struct RunArgs {
     pub generate_test: Option<PathBuf>,
 
     /// Overwrite the test file if it already exists (default: append)
+
     #[arg(long)]
     pub overwrite: bool,
 
@@ -275,14 +310,47 @@ impl RunArgs {
             }
         }
     }
+
 }
 
-#[derive(Parser)]
-pub struct InteractiveArgs {
-    /// Path to the contract WASM file
-    #[arg(short, long)]
-    pub contract: PathBuf,
+impl RunArgs {
+    pub fn is_json_output(&self) -> bool {
+        self.output_format == OutputFormat::Json
+            || self.json
+            || self
+                .format
+                .as_deref()
+                .map(|f| f.eq_ignore_ascii_case("json"))
+                .unwrap_or(false)
+    }
 
+    pub fn merge_config(&mut self, config: &Config) {
+        // Breakpoints
+        if self.breakpoint.is_empty() && !config.debug.breakpoints.is_empty() {
+            self.breakpoint = config.debug.breakpoints.clone();
+        }
+
+        // Show events
+        if !self.show_events {
+            if let Some(show) = config.output.show_events {
+                self.show_events = show;
+            }
+        }
+
+        // Output Format
+        if self.format.is_none() {
+            self.format = config.output.format.clone();
+        }
+
+        // Verbosity: if config has a level > 0 and CLI verbose is false, enable it
+        if !self.verbose {
+            if let Some(level) = config.debug.verbosity {
+                if level > 0 {
+                    self.verbose = true;
+                }
+            }
+ pub struct RemoteArgs {
+    pub args: Option<String>,
     /// Deprecated: use --contract instead
     #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
     pub wasm: Option<PathBuf>,
@@ -295,6 +363,38 @@ pub struct InteractiveArgs {
     #[arg(long, hide = true, alias = "snapshot")]
     pub snapshot: Option<PathBuf>,
 
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
+}
+
+impl InteractiveArgs {
+    pub fn merge_config(&mut self, _config: &Config) {
+        // Future interactive-specific config could go here
+    }
+}
+
+#[derive(Parser)]
+pub struct ReplArgs {
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
+
+    /// Deprecated: use --contract instead
+    #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
+    pub wasm: Option<PathBuf>,
+
+    /// Network snapshot file to load before starting REPL session
+    /// Network snapshot file to load before starting interactive session
+    #[arg(long)]
+    pub network_snapshot: Option<PathBuf>,
+
+    /// Deprecated: use --network-snapshot instead
+    #[arg(long, hide = true, alias = "snapshot")]
+    pub snapshot: Option<PathBuf>,
+
+    /// Initial storage state as JSON object
+    #[arg(short, long)]
     /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
     #[arg(long)]
     pub expected_hash: Option<String>,
@@ -409,29 +509,291 @@ pub struct OptimizeArgs {
     /// Deprecated: use --network-snapshot instead
     #[arg(long, hide = true, alias = "snapshot")]
     pub snapshot: Option<PathBuf>,
+ dd5a24aa2a5cb2a82c962d42f6b3fa948882f7fd
 }
 
 #[derive(Parser)]
-pub struct UpgradeCheckArgs {
-    /// Path to the old contract WASM file
+pub struct AnalyzeArgs {
+    /// Path to the contract WASM file
     #[arg(short, long)]
-    pub old: PathBuf,
+    pub contract: PathBuf,
 
-    /// Path to the new contract WASM file
-    #[arg(short, long)]
-    pub new: PathBuf,
-
-    /// Function name to test side-by-side (optional)
+    /// Function name to execute for dynamic analysis (optional)
     #[arg(short, long)]
     pub function: Option<String>,
 
-    /// Function arguments as JSON array for side-by-side test
+    /// Function arguments as JSON array for dynamic analysis (optional)
     #[arg(short, long)]
     pub args: Option<String>,
 
-    /// Output file for the compatibility report (default: stdout)
-    #[arg(long)]
+    /// Initial storage state as JSON object (optional)
+    #[arg(short, long)]
+    pub storage: Option<String>,
+
+    /// Output format (text, json)
+    #[arg(long, default_value = "text")]
+    pub format: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Commands, OutputFormat};
+    use clap::Parser;
+
+    #[test]
+    fn run_output_defaults_to_pretty() {
+        let cli = Cli::parse_from([
+            "soroban-debug",
+            "run",
+            "--contract",
+            "contract.wasm",
+            "--function",
+            "increment",
+        ]);
+
+        let Commands::Run(args) = cli.command.expect("run command expected") else {
+            panic!("run command expected");
+        };
+
+        assert_eq!(args.output_format, OutputFormat::Pretty);
+        assert!(!args.is_json_output());
+    }
+
+    #[test]
+    fn run_output_json_enables_json_mode() {
+        let cli = Cli::parse_from([
+            "soroban-debug",
+            "run",
+            "--contract",
+            "contract.wasm",
+            "--function",
+            "increment",
+            "--output",
+            "json",
+        ]);
+
+        let Commands::Run(args) = cli.command.expect("run command expected") else {
+            panic!("run command expected");
+        };
+
+        assert_eq!(args.output_format, OutputFormat::Json);
+        assert!(args.is_json_output());
+    }
+
+    #[test]
+    fn legacy_json_flag_still_enables_json_mode() {
+        let cli = Cli::parse_from([
+            "soroban-debug",
+            "run",
+            "--contract",
+            "contract.wasm",
+            "--function",
+            "increment",
+            "--json",
+        ]);
+
+        let Commands::Run(args) = cli.command.expect("run command expected") else {
+            panic!("run command expected");
+        };
+
+        assert!(args.is_json_output());
+    }
+
+    #[test]
+    fn legacy_format_json_still_enables_json_mode() {
+        let cli = Cli::parse_from([
+            "soroban-debug",
+            "run",
+            "--contract",
+            "contract.wasm",
+            "--function",
+            "increment",
+            "--format",
+            "json",
+        ]);
+
+        let Commands::Run(args) = cli.command.expect("run command expected") else {
+            panic!("run command expected");
+        };
+
+        assert!(args.is_json_output());
+    }
+}
+
+#[derive(Parser)]
+pub struct CompareArgs {
+    /// Path to the first execution trace JSON file (trace A)
+    #[arg(value_name = "TRACE_A")]
+    pub trace_a: PathBuf,
+
+    /// Path to the second execution trace JSON file (trace B)
+    #[arg(value_name = "TRACE_B")]
+    pub trace_b: PathBuf,
+
+    /// Output file for the comparison report (default: stdout)
+    #[arg(short, long)]
     pub output: Option<PathBuf>,
+}
+
+/// Arguments for the TUI dashboard subcommand
+#[derive(Parser)]
+pub struct TuiArgs {
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
+
+    /// Function name to execute inside the TUI
+    #[arg(short, long)]
+    pub function: String,
+
+    /// Function arguments as JSON array (e.g., '["arg1", "arg2"]')
+    #[arg(short, long)]
+    pub args: Option<String>,
+
+    /// Initial storage state as JSON object
+    #[arg(short, long)]
+    pub storage: Option<String>,
+
+    /// Set breakpoints at function names
+    #[arg(short, long)]
+    pub breakpoint: Vec<String>,
+
+    /// Network snapshot file to load before execution
+    #[arg(long)]
+    pub network_snapshot: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct ProfileArgs {
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
+
+    /// Deprecated: use --contract instead
+    #[arg(long, hide = true, alias = "wasm", alias = "contract-path")]
+    pub wasm: Option<PathBuf>,
+
+    /// Function name to execute
+    #[arg(short, long)]
+    pub function: String,
+
+    /// Function arguments as JSON array (e.g., '["arg1", "arg2"]')
+    #[arg(short, long)]
+    pub args: Option<String>,
+
+    /// Output file for the profile report (default: stdout)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Initial storage state as JSON object
+    #[arg(short, long)]
+    pub storage: Option<String>,
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
+}
+
+#[derive(Parser)]
+pub struct SymbolicArgs {
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
+
+    /// Function name to execute
+    #[arg(short, long)]
+    pub function: String,
+
+    /// Output file for the scenario TOML
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct ReplayArgs {
+    /// Path to the trace JSON file to replay
+    #[arg(value_name = "TRACE_FILE")]
+    pub trace_file: PathBuf,
+
+    /// Path to the contract WASM file (optional, defaults to trace file's contract path)
+    #[arg(short, long)]
+    pub contract: Option<PathBuf>,
+
+    /// Stop replay at step N (0-based index into call sequence)
+    #[arg(long)]
+    pub replay_until: Option<usize>,
+
+    /// Output file for the diff report (default: stdout)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Show verbose output during replay
+    #[arg(short, long)]
+    pub verbose: bool,
+}
+
+#[derive(Parser)]
+pub struct ServerArgs {
+    /// Port to listen on
+    #[arg(short, long, default_value = "9229")]
+    pub port: u16,
+
+    /// Authentication token (optional, if not provided no auth required)
+    #[arg(short, long)]
+    pub token: Option<String>,
+
+    /// TLS certificate file path (optional)
+    #[arg(long)]
+    pub tls_cert: Option<PathBuf>,
+
+    /// TLS private key file path (optional)
+    #[arg(long)]
+    pub tls_key: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct RemoteArgs {
+    /// Remote server address (e.g., localhost:9229)
+    #[arg(short, long)]
+    pub remote: String,
+
+    /// Authentication token (if required by server)
+    #[arg(short, long)]
+    pub token: Option<String>,
+
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: Option<PathBuf>,
+
+    /// Function name to execute
+    #[arg(short, long)]
+    pub function: Option<String>,
+
+    /// Function arguments as JSON array
+    #[arg(short, long)]
+    pub args: Option<String>,
+}
+
+#[derive(Parser)]
+pub struct AnalyzeArgs {
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
+
+    /// Function name to execute for dynamic analysis (optional)
+    #[arg(short, long)]
+    pub function: Option<String>,
+
+    /// Function arguments as JSON array for dynamic analysis (optional)
+    #[arg(short, long)]
+    pub args: Option<String>,
+
+    /// Initial storage state as JSON object (optional)
+    #[arg(short, long)]
+    pub storage: Option<String>,
+
+    /// Output format (text, json)
+    #[arg(long, default_value = "text")]
+    pub format: String,
 }
 
 #[derive(Parser)]

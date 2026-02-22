@@ -1,3 +1,73 @@
+ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH run 1  "run " 
+.SH NAME
+run \- Run a contract function with the debugger
+.SH SYNOPSIS
+\fBrun\fR <\fB\-c\fR|\fB\-\-contract\fR> <\fB\-f\fR|\fB\-\-function\fR> [\fB\-a\fR|\fB\-\-args\fR] [\fB\-s\fR|\fB\-\-storage\fR] [\fB\-b\fR|\fB\-\-breakpoint\fR] [\fB\-\-network\-snapshot\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-output\fR] [\fB\-\-show\-events\fR] [\fB\-\-show\-auth\fR] [\fB\-\-filter\-topic\fR] [\fB\-\-repeat\fR] [\fB\-\-mock\fR] [\fB\-\-storage\-filter\fR] [\fB\-\-instruction\-debug\fR] [\fB\-\-step\-instructions\fR] [\fB\-\-step\-mode\fR] [\fB\-\-dry\-run\fR] [\fB\-\-export\-storage\fR] [\fB\-\-import\-storage\fR] [\fB\-\-batch\-args\fR] [\fB\-\-generate\-test\fR] [\fB\-\-overwrite\fR] [\fB\-\-timeout\fR] [\fB\-\-alert\-on\-change\fR] [\fB\-\-expected\-hash\fR] [\fB\-\-show\-ledger\fR] [\fB\-\-ttl\-warning\-threshold\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Run a contract function with the debugger
+.SH OPTIONS
+.TP
+\fB\-c\fR, \fB\-\-contract\fR \fI<CONTRACT>\fR
+Path to the contract WASM file
+.TP
+\fB\-f\fR, \fB\-\-function\fR \fI<FUNCTION>\fR
+Function name to execute
+.TP
+\fB\-a\fR, \fB\-\-args\fR \fI<ARGS>\fR
+Function arguments as JSON array (e.g., \*(Aq["arg1", "arg2"]\*(Aq)
+.TP
+\fB\-s\fR, \fB\-\-storage\fR \fI<STORAGE>\fR
+Initial storage state as JSON object
+.TP
+\fB\-b\fR, \fB\-\-breakpoint\fR \fI<BREAKPOINT>\fR
+Set breakpoint at function name
+.TP
+\fB\-\-network\-snapshot\fR \fI<NETWORK_SNAPSHOT>\fR
+Network snapshot file to load before execution
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Enable verbose output
+.TP
+\fB\-\-output\fR \fI<OUTPUT>\fR [default: pretty]
+Output format: pretty (default) or json
+.br
+
+.br
+[\fIpossible values: \fRpretty, json]
+.TP
+\fB\-\-show\-events\fR
+Show contract events emitted during execution
+.TP
+\fB\-\-show\-auth\fR
+Show authorization tree during execution
+.TP
+\fB\-\-filter\-topic\fR \fI<FILTER_TOPIC>\fR
+Filter events by topic
+.TP
+\fB\-\-repeat\fR \fI<REPEAT>\fR
+Execute the contract call N times for stress testing
+.TP
+\fB\-\-mock\fR \fI<CONTRACT_ID.function=return_value>\fR
+Mock cross\-contract return: CONTRACT_ID.function=return_value (repeatable)
+.TP
+\fB\-\-storage\-filter\fR \fI<PATTERN>\fR
+Filter storage output by key pattern (repeatable). Supports: prefix*       — match keys starting with prefix re:<regex>    — match keys by regex exact_key     — match key exactly
+.TP
+\fB\-\-instruction\-debug\fR
+Enable instruction\-level debugging
+.TP
+\fB\-\-step\-instructions\fR
+Start with instruction stepping enabled
+.TP
+\fB\-\-step\-mode\fR \fI<STEP_MODE>\fR [default: into]
+Step mode for instruction debugging (into, over, out, block)
+.TP
+\fB\-\-dry\-run\fR
+Execute contract in dry\-run mode: simulate execution without persisting storage changes
+.TP
+\fB\-\-export\-storage\fR \fI<EXPORT_STORAGE>\fR
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
 .TH soroban-debug 1  "soroban-debug 0.1.0" 
