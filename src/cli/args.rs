@@ -116,6 +116,9 @@ pub enum Commands {
 
     /// Analyze contract for security vulnerabilities
     Analyze(AnalyzeArgs),
+
+    /// Run a multi-step scenario from a TOML file
+    Scenario(ScenarioArgs),
 }
 
 #[derive(Parser)]
@@ -608,4 +611,19 @@ pub struct AnalyzeArgs {
     /// Output format (text, json)
     #[arg(long, default_value = "text")]
     pub format: String,
+}
+
+#[derive(Parser)]
+pub struct ScenarioArgs {
+    /// Path to the scenario TOML file
+    #[arg(long)]
+    pub scenario: PathBuf,
+
+    /// Path to the contract WASM file
+    #[arg(short, long)]
+    pub contract: PathBuf,
+
+    /// Initial storage state as JSON object
+    #[arg(long)]
+    pub storage: Option<String>,
 }

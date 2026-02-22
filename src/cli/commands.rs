@@ -1,6 +1,6 @@
 use crate::cli::args::{
     AnalyzeArgs, CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RemoteArgs,
-    ReplArgs, ReplayArgs, RunArgs, ServerArgs, SymbolicArgs, TuiArgs, UpgradeCheckArgs, Verbosity,
+    ReplArgs, ReplayArgs, RunArgs, ScenarioArgs, ServerArgs, SymbolicArgs, TuiArgs, UpgradeCheckArgs, Verbosity,
 };
 use crate::debugger::engine::DebuggerEngine;
 use crate::debugger::instruction_pointer::StepMode;
@@ -1879,4 +1879,8 @@ pub async fn repl(args: ReplArgs) -> Result<()> {
     start_repl(config).await?;
 
     Ok(())
+}
+
+pub fn scenario(args: ScenarioArgs, verbosity: Verbosity) -> Result<()> {
+    crate::scenario::run_scenario(args, verbosity)
 }

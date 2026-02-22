@@ -161,6 +161,7 @@ fn main() -> miette::Result<()> {
         Some(Commands::Server(args)) => soroban_debugger::cli::commands::server(args),
         Some(Commands::Remote(args)) => soroban_debugger::cli::commands::remote(args, verbosity),
         Some(Commands::Analyze(args)) => soroban_debugger::cli::commands::analyze(args, verbosity),
+        Some(Commands::Scenario(args)) => soroban_debugger::cli::commands::scenario(args, verbosity),
         Some(Commands::Repl(mut args)) => {
             args.merge_config(&config);
             tokio::runtime::Runtime::new()

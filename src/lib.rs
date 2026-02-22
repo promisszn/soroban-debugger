@@ -19,6 +19,7 @@ pub mod server;
 pub mod simulator;
 pub mod ui;
 pub mod utils;
+pub mod scenario;
 use miette::Diagnostic;
 
 pub use debugger::engine::DebuggerEngine;
