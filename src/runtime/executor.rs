@@ -3,6 +3,7 @@ use crate::utils::ArgumentParser;
 use crate::{runtime::mocking::MockCallLogEntry, runtime::mocking::MockContractDispatcher};
 use crate::{DebuggerError, Result};
 
+use indicatif::{ProgressBar, ProgressStyle};
 use soroban_env_host::xdr::ScVal;
 use soroban_env_host::{DiagnosticLevel, Host, TryFromVal};
 use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
@@ -43,12 +44,39 @@ impl ContractExecutor {
     pub fn new(wasm: Vec<u8>) -> Result<Self> {
         info!("Initializing contract executor");
 
+        // Create progress bar for WASM loading
+        let pb = ProgressBar::new(100);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {msg}")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+        pb.set_message("Loading WASM contract...");
+
+        // Use a guard to ensure progress bar is always cleared
+        struct ProgressGuard(ProgressBar);
+        impl Drop for ProgressGuard {
+            fn drop(&mut self) {
+                self.0.finish_and_clear();
+            }
+        }
+        let _guard = ProgressGuard(pb);
+
         let env = Env::default();
         env.host()
             .set_diagnostic_level(DiagnosticLevel::Debug)
             .expect("Failed to set diagnostic level");
 
+        // Simulate progress during WASM registration
+        _guard.0.set_position(50);
+        _guard.0.set_message("Registering contract...");
+
         let contract_address = env.register(wasm.as_slice(), ());
+
+        // Complete the progress bar
+        _guard.0.set_position(100);
+        _guard.0.set_message("Contract loaded successfully");
 
         Ok(Self {
             env,
@@ -69,9 +97,27 @@ impl ContractExecutor {
     pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<String> {
         info!("Executing function: {}", function);
 
+        // Create spinner for contract execution
+        let spinner = ProgressBar::new_spinner();
+        spinner.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {msg}")
+                .unwrap()
+                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+        );
+        spinner.set_message(format!("Executing function: {}...", function));
+        spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+
         // Validate function existence
-        let exported_functions = crate::utils::wasm::parse_functions(&self.wasm_bytes)?;
+        let exported_functions = match crate::utils::wasm::parse_functions(&self.wasm_bytes) {
+            Ok(funcs) => funcs,
+            Err(e) => {
+                spinner.finish_and_clear();
+                return Err(e);
+            }
+        };
         if !exported_functions.contains(&function.to_string()) {
+            spinner.finish_and_clear();
             return Err(DebuggerError::InvalidFunction(function.to_string()).into());
         }
 
@@ -79,7 +125,13 @@ impl ContractExecutor {
         let func_symbol = Symbol::new(&self.env, function);
 
         let parsed_args = if let Some(args_json) = args {
-            self.parse_args(args_json)?
+            match self.parse_args(args_json) {
+                Ok(args) => args,
+                Err(e) => {
+                    spinner.finish_and_clear();
+                    return Err(e);
+                }
+            }
         } else {
             vec![]
         };
@@ -91,19 +143,30 @@ impl ContractExecutor {
         };
 
         // Capture storage before
-        let storage_before = self.get_storage_snapshot()?;
+        let storage_before = match self.get_storage_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                spinner.finish_and_clear();
+                return Err(e);
+            }
+        };
 
         // Convert args to ScVal for record
-        let sc_args: Vec<ScVal> = parsed_args
+        let sc_args: Vec<ScVal> = match parsed_args
             .iter()
             .map(|v| ScVal::try_from_val(self.env.host(), v))
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| {
-                DebuggerError::ExecutionError(format!(
+        {
+            Ok(args) => args,
+            Err(e) => {
+                spinner.finish_and_clear();
+                return Err(DebuggerError::ExecutionError(format!(
                     "Failed to convert arguments to ScVal: {:?}",
                     e
                 ))
-            })?;
+                .into());
+            }
+        };
 
         let (tx, rx) = std::sync::mpsc::channel();
         if self.timeout_secs > 0 {
@@ -130,8 +193,17 @@ impl ContractExecutor {
             args_vec,
         );
 
+        // Clear spinner after execution
+        spinner.finish_and_clear();
+
         // Capture storage after
-        let storage_after = self.get_storage_snapshot()?;
+        let storage_after = match self.get_storage_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                // Spinner already cleared, just return error
+                return Err(e);
+            }
+        };
 
         let (display_result, record_result) = match &invocation_result {
             Ok(Ok(val)) => {

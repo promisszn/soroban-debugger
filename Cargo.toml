@@ -55,6 +55,7 @@ textplots = "0.8"
 chrono = "0.4"
 rayon = "1.10"
 colored = "2.0"
+indicatif = "0.17"
 stellar-xdr = { version = "22.1.0", features = ["curr"] }
 hex = "0.4.3"
 base64 = "0.21.7"
