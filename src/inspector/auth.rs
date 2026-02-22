@@ -63,11 +63,14 @@ impl AuthInspector {
     /// Display the authorization tree in a human-readable format
     pub fn display(nodes: &[AuthNode]) {
         if nodes.is_empty() {
-            println!("No authorizations recorded.");
+            crate::logging::log_display(
+                "No authorizations recorded.",
+                crate::logging::LogLevel::Info,
+            );
             return;
         }
 
-        println!("Authorization Tree:");
+        crate::logging::log_display("Authorization Tree:", crate::logging::LogLevel::Info);
         for node in nodes {
             Self::print_node(node, 0, true);
         }
@@ -89,9 +92,12 @@ impl AuthInspector {
             "".to_string()
         };
 
-        println!(
-            "{}{} [Contract: {}]",
-            full_prefix, node.function, node.contract_id
+        crate::logging::log_display(
+            format!(
+                "{}{} [Contract: {}]",
+                full_prefix, node.function, node.contract_id
+            ),
+            crate::logging::LogLevel::Info,
         );
 
         for (i, sub) in node.sub_invocations.iter().enumerate() {

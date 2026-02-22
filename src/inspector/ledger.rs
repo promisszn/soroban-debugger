@@ -124,13 +124,19 @@ impl LedgerEntryInspector {
     /// Display all ledger entries grouped by storage type in a formatted table.
     pub fn display(&self) {
         if self.entries.is_empty() {
-            println!("  (No ledger entries accessed)");
+            crate::logging::log_display(
+                "  (No ledger entries accessed)",
+                crate::logging::LogLevel::Info,
+            );
             return;
         }
 
-        println!(
-            "\n  {} ledger entries accessed during execution:\n",
-            self.entries.len()
+        crate::logging::log_display(
+            format!(
+                "\n  {} ledger entries accessed during execution:\n",
+                self.entries.len()
+            ),
+            crate::logging::LogLevel::Info,
         );
 
         // Display entries grouped by type
@@ -150,15 +156,24 @@ impl LedgerEntryInspector {
                 StorageType::Temporary => Color::Magenta,
             };
 
-            println!(
-                "  {} ({} entries)",
-                format!("[{}]", storage_type).with(type_color).bold(),
-                entries.len()
+            crate::logging::log_display(
+                format!(
+                    "  {} ({} entries)",
+                    format!("[{}]", storage_type).with(type_color).bold(),
+                    entries.len()
+                ),
+                crate::logging::LogLevel::Info,
             );
 
             // Table header
-            println!("  {:<30} | {:<8} | {:<10} | Value", "Key", "Access", "TTL");
-            println!("  {:-<30}-+-{:-<8}-+-{:-<10}-+-{:-<30}", "", "", "", "");
+            crate::logging::log_display(
+                format!("  {:<30} | {:<8} | {:<10} | Value", "Key", "Access", "TTL"),
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display(
+                format!("  {:-<30}-+-{:-<8}-+-{:-<10}-+-{:-<30}", "", "", "", ""),
+                crate::logging::LogLevel::Info,
+            );
 
             for entry in &entries {
                 let access = match (entry.is_read, entry.is_write) {
@@ -186,15 +201,18 @@ impl LedgerEntryInspector {
                     Color::Green
                 };
 
-                println!(
-                    "  {:<30} | {:<8} | {:<10} | {}",
-                    key_display.with(Color::White),
-                    access.with(Color::Yellow),
-                    entry.ttl.to_string().with(ttl_color),
-                    value_display.with(Color::DarkGrey)
+                crate::logging::log_display(
+                    format!(
+                        "  {:<30} | {:<8} | {:<10} | {}",
+                        key_display.with(Color::White),
+                        access.with(Color::Yellow),
+                        entry.ttl.to_string().with(ttl_color),
+                        value_display.with(Color::DarkGrey)
+                    ),
+                    crate::logging::LogLevel::Info,
                 );
             }
-            println!();
+            crate::logging::log_display("", crate::logging::LogLevel::Info);
         }
     }
 
@@ -205,15 +223,18 @@ impl LedgerEntryInspector {
             return;
         }
 
-        println!(
-            "  {}",
+        crate::logging::log_display(
             format!(
-                "⚠ {} ledger entries near expiration (TTL < {}):",
-                near_expiry.len(),
-                self.ttl_warning_threshold
-            )
-            .with(Color::Yellow)
-            .bold()
+                "  {}",
+                format!(
+                    "⚠ {} ledger entries near expiration (TTL < {}):",
+                    near_expiry.len(),
+                    self.ttl_warning_threshold
+                )
+                .with(Color::Yellow)
+                .bold()
+            ),
+            crate::logging::LogLevel::Warn,
         );
 
         for entry in &near_expiry {
@@ -225,15 +246,18 @@ impl LedgerEntryInspector {
                 "WARNING".with(Color::Yellow).bold()
             };
 
-            println!(
-                "    {} [{}] {} — TTL: {}",
-                urgency,
-                entry.storage_type,
-                entry.key.clone().with(Color::White),
-                entry.ttl.to_string().with(Color::Red)
+            crate::logging::log_display(
+                format!(
+                    "    {} [{}] {} — TTL: {}",
+                    urgency,
+                    entry.storage_type,
+                    entry.key.clone().with(Color::White),
+                    entry.ttl.to_string().with(Color::Red)
+                ),
+                crate::logging::LogLevel::Warn,
             );
         }
-        println!();
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
     }
 
     /// Convert all entries to a JSON-serializable value.

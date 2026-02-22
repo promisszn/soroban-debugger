@@ -45,7 +45,6 @@ impl DebuggerUI {
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Command execution error");
-                    eprintln!("{:?}", e);
                 }
             }
         }
@@ -95,10 +94,16 @@ impl DebuggerUI {
             "list-breaks" => {
                 let breakpoints = self.engine.breakpoints_mut().list();
                 if breakpoints.is_empty() {
-                    println!("No breakpoints set");
+                    crate::logging::log_display(
+                        "No breakpoints set",
+                        crate::logging::LogLevel::Info,
+                    );
                 } else {
                     for bp in breakpoints {
-                        println!("- {}", bp);
+                        crate::logging::log_display(
+                            format!("- {}", bp),
+                            crate::logging::LogLevel::Info,
+                        );
                     }
                 }
             }
@@ -123,34 +128,79 @@ impl DebuggerUI {
     }
 
     fn inspect(&self) {
-        println!("\n=== Current State ===");
+        crate::logging::log_display("\n=== Current State ===", crate::logging::LogLevel::Info);
         if let Ok(state) = self.engine.state().lock() {
             if let Some(func) = state.current_function() {
-                println!("Function: {}", func);
+                crate::logging::log_display(
+                    format!("Function: {}", func),
+                    crate::logging::LogLevel::Info,
+                );
             } else {
-                println!("Function: (none)");
+                crate::logging::log_display("Function: (none)", crate::logging::LogLevel::Info);
             }
-            println!("Steps: {}", state.step_count());
-            println!("Paused: {}", self.engine.is_paused());
-            println!();
+            crate::logging::log_display(
+                format!("Steps: {}", state.step_count()),
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display(
+                format!("Paused: {}", self.engine.is_paused()),
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display("", crate::logging::LogLevel::Info);
             state.call_stack().display();
         } else {
-            println!("State unavailable");
+            crate::logging::log_display("State unavailable", crate::logging::LogLevel::Info);
         }
     }
 
     fn print_help(&self) {
-        println!("Interactive debugger commands:");
-        println!("  step | s           Step execution");
-        println!("  continue | c       Continue execution");
-        println!("  inspect | i        Show current state");
-        println!("  storage            Show tracked storage view");
-        println!("  stack              Show call stack");
-        println!("  budget             Show budget usage");
-        println!("  break <func>       Set breakpoint");
-        println!("  list-breaks        List breakpoints");
-        println!("  clear <func>       Clear breakpoint");
-        println!("  help               Show this help");
-        println!("  quit | q           Exit debugger");
+        crate::logging::log_display(
+            "Interactive debugger commands:",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  step | s           Step execution",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  continue | c       Continue execution",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  inspect | i        Show current state",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  storage            Show tracked storage view",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  stack              Show call stack",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  budget             Show budget usage",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  break <func>       Set breakpoint",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  list-breaks        List breakpoints",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  clear <func>       Clear breakpoint",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  help               Show this help",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  quit | q           Exit debugger",
+            crate::logging::LogLevel::Info,
+        );
     }
 }

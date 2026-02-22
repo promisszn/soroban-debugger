@@ -387,7 +387,7 @@ pub fn run_dashboard(engine: DebuggerEngine, function_name: &str) -> Result<()> 
         .map_err(|e| DebuggerError::FileError(format!("Failed to show cursor: {}", e)))?;
 
     if let Err(err) = res {
-        eprintln!("TUI error: {:?}", err);
+        tracing::error!("TUI error: {:?}", err);
     }
 
     Ok(())

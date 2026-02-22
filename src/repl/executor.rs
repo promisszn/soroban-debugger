@@ -5,7 +5,7 @@
 use super::ReplConfig;
 use crate::inspector::StorageInspector;
 use crate::runtime::executor::ContractExecutor;
-use crate::ui::formatter::Formatter;
+
 use crate::Result;
 use std::fs;
 
@@ -36,22 +36,20 @@ impl ReplExecutor {
 
     /// Call a contract function
     pub async fn call_function(&mut self, function: &str, args: Vec<String>) -> Result<()> {
-        println!(
-            "{}",
-            Formatter::info(
-                format!("Calling function: {} with args: {:?}", function, args).as_str()
-            )
+        crate::logging::log_display(
+            format!("Calling function: {} with args: {:?}", function, args),
+            crate::logging::LogLevel::Info,
         );
 
         // For now, we'll just simulate the call and show the formatted output
         // In a real implementation, this would execute against the loaded contract
-        println!(
-            "{}",
-            Formatter::success(format!("✓ Function {} called successfully", function).as_str())
+        crate::logging::log_display(
+            format!("✓ Function {} called successfully", function),
+            crate::logging::LogLevel::Info,
         );
 
         // Show the result
-        println!("{}", Formatter::info("Result: (simulated output)"));
+        crate::logging::log_display("Result: (simulated output)", crate::logging::LogLevel::Info);
 
         Ok(())
     }
@@ -61,13 +59,13 @@ impl ReplExecutor {
         let entries = self.storage_inspector.get_all();
 
         if entries.is_empty() {
-            println!("{}", Formatter::warning("Storage is empty"));
+            crate::logging::log_display("Storage is empty", crate::logging::LogLevel::Warn);
             return Ok(());
         }
 
-        println!();
-        println!("{}", Formatter::success("=== Contract Storage ==="));
-        println!();
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=== Contract Storage ===", crate::logging::LogLevel::Info);
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
 
         let mut last_prefix = String::new();
         for (key, value) in entries.iter() {
@@ -76,13 +74,16 @@ impl ReplExecutor {
             let prefix = parts.first().unwrap_or(&"").to_string();
 
             if prefix != last_prefix && !last_prefix.is_empty() {
-                println!();
+                crate::logging::log_display("", crate::logging::LogLevel::Info);
             }
             last_prefix = prefix;
 
-            println!("  {}: {}", Formatter::info(key), Formatter::info(value));
+            crate::logging::log_display(
+                format!("  {}: {}", key, value),
+                crate::logging::LogLevel::Info,
+            );
         }
-        println!();
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
 
         Ok(())
     }

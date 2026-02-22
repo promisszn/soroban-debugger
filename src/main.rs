@@ -3,41 +3,24 @@ use clap_complete::generate;
 use soroban_debugger::cli::{Cli, Commands, Verbosity};
 use soroban_debugger::ui::formatter::Formatter;
 use std::io;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn initialize_tracing(verbosity: Verbosity) {
     let log_level = verbosity.to_log_level();
-    let fallback_filter = format!("soroban_debugger={}", log_level);
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| format!("soroban_debugger={}", log_level).into());
 
     let use_json = std::env::var("SOROBAN_DEBUG_JSON").is_ok();
 
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_target(true)
+        .with_level(true)
+        .with_env_filter(env_filter);
+
     if use_json {
-        let json_layer = tracing_subscriber::fmt::layer()
-            .json()
-            .with_writer(std::io::stderr)
-            .with_target(true)
-            .with_level(true);
-
-        tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| fallback_filter.clone().into()),
-            )
-            .with(json_layer)
-            .init();
+        subscriber.json().init();
     } else {
-        let fmt_layer = tracing_subscriber::fmt::layer()
-            .with_writer(std::io::stderr)
-            .with_target(true)
-            .with_level(true);
-
-        tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| fallback_filter.into()),
-            )
-            .with(fmt_layer)
-            .init();
+        subscriber.init();
     }
 }
 
@@ -45,11 +28,11 @@ fn handle_deprecations(cli: &mut Cli) {
     match &mut cli.command {
         Some(Commands::Run(args)) => {
             if let Some(wasm) = args.wasm.take() {
-                eprintln!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
+                tracing::warn!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
                 args.contract = wasm;
             }
             if let Some(snapshot) = args.snapshot.take() {
-                eprintln!(
+                tracing::warn!(
                     "{}",
                     Formatter::warning(
                         "Warning: --snapshot is deprecated. Please use --network-snapshot instead."
@@ -60,11 +43,11 @@ fn handle_deprecations(cli: &mut Cli) {
         }
         Some(Commands::Interactive(args)) => {
             if let Some(wasm) = args.wasm.take() {
-                eprintln!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
+                tracing::warn!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
                 args.contract = wasm;
             }
             if let Some(snapshot) = args.snapshot.take() {
-                eprintln!(
+                tracing::warn!(
                     "{}",
                     Formatter::warning(
                         "Warning: --snapshot is deprecated. Please use --network-snapshot instead."
@@ -75,17 +58,17 @@ fn handle_deprecations(cli: &mut Cli) {
         }
         Some(Commands::Inspect(args)) => {
             if let Some(wasm) = args.wasm.take() {
-                eprintln!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
+                tracing::warn!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
                 args.contract = wasm;
             }
         }
         Some(Commands::Optimize(args)) => {
             if let Some(wasm) = args.wasm.take() {
-                eprintln!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
+                tracing::warn!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
                 args.contract = wasm;
             }
             if let Some(snapshot) = args.snapshot.take() {
-                eprintln!(
+                tracing::warn!(
                     "{}",
                     Formatter::warning(
                         "Warning: --snapshot is deprecated. Please use --network-snapshot instead."
@@ -96,17 +79,17 @@ fn handle_deprecations(cli: &mut Cli) {
         }
         Some(Commands::Profile(args)) => {
             if let Some(wasm) = args.wasm.take() {
-                eprintln!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
+                tracing::warn!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
                 args.contract = wasm;
             }
         }
         Some(Commands::Repl(args)) => {
             if let Some(wasm) = args.wasm.take() {
-                eprintln!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
+                tracing::warn!("{}", Formatter::warning("Warning: --wasm and --contract-path are deprecated. Please use --contract instead."));
                 args.contract = wasm;
             }
             if let Some(snapshot) = args.snapshot.take() {
-                eprintln!(
+                tracing::warn!(
                     "{}",
                     Formatter::warning(
                         "Warning: --snapshot is deprecated. Please use --network-snapshot instead."
@@ -190,14 +173,17 @@ fn main() -> miette::Result<()> {
             } else {
                 let mut cmd = Cli::command();
                 cmd.print_help().map_err(|e| miette::miette!(e))?;
-                println!();
+                tracing::info!("");
                 Ok(())
             }
         }
     };
 
     if let Err(err) = result {
-        eprintln!("{}", Formatter::error(format!("Error: {err:#}")));
+        tracing::error!(
+            "{}",
+            Formatter::error(format!("Error handling deprecations: {err:#}"))
+        );
         return Err(err);
     }
 

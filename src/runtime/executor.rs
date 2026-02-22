@@ -39,6 +39,7 @@ pub struct ContractExecutor {
 
 impl ContractExecutor {
     /// Create a new contract executor.
+    #[tracing::instrument(skip_all)]
     pub fn new(wasm: Vec<u8>) -> Result<Self> {
         info!("Initializing contract executor");
 
@@ -64,6 +65,7 @@ impl ContractExecutor {
     }
 
     /// Execute a contract function.
+    #[tracing::instrument(skip(self), fields(function = function))]
     pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<String> {
         info!("Executing function: {}", function);
 
@@ -110,8 +112,8 @@ impl ContractExecutor {
                 match rx.recv_timeout(std::time::Duration::from_secs(timeout_secs)) {
                     Ok(_) => {}
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        eprintln!(
-                            "\nError: Contract execution timed out after {} seconds.",
+                        tracing::error!(
+                            "Contract execution timed out after {} seconds.",
                             timeout_secs
                         );
                         std::process::exit(124);

@@ -272,16 +272,28 @@ impl StorageInspector {
     pub fn display_access_report(&self) {
         let report = self.analyze_access_patterns();
         if report.stats.is_empty() {
-            println!("No storage access patterns recorded.");
+            crate::logging::log_display(
+                "No storage access patterns recorded.",
+                crate::logging::LogLevel::Info,
+            );
             return;
         }
 
-        println!("\nStorage Access Pattern Report");
-        println!(
-            "{:<30} | {:<10} | {:<10} | {:<20}",
-            "Key", "Reads", "Writes", "Notes"
+        crate::logging::log_display(
+            "\nStorage Access Pattern Report",
+            crate::logging::LogLevel::Info,
         );
-        println!("{:-<30}-+-{:-<10}-+-{:-<10}-+-{:-<20}", "", "", "", "");
+        crate::logging::log_display(
+            format!(
+                "{:<30} | {:<10} | {:<10} | {:<20}",
+                "Key", "Reads", "Writes", "Notes"
+            ),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!("{:-<30}-+-{:-<10}-+-{:-<10}-+-{:-<20}", "", "", "", ""),
+            crate::logging::LogLevel::Info,
+        );
 
         let mut entries: Vec<_> = report.stats.into_iter().collect();
         // Sort primarily by highest reads, then highest writes, then alphabetically
@@ -315,23 +327,26 @@ impl StorageInspector {
                 key.clone()
             };
 
-            println!(
-                "{:<30} | {:<10} | {:<10} | {}",
-                key_display.with(Color::Cyan),
-                stat.reads.to_string().with(if stat.reads > 5 {
-                    Color::Red
-                } else {
-                    Color::White
-                }),
-                stat.writes.to_string().with(if stat.writes > stat.reads {
-                    Color::Yellow
-                } else {
-                    Color::White
-                }),
-                display_notes.with(Color::DarkGrey)
+            crate::logging::log_display(
+                format!(
+                    "{:<30} | {:<10} | {:<10} | {}",
+                    key_display.with(Color::Cyan),
+                    stat.reads.to_string().with(if stat.reads > 5 {
+                        Color::Red
+                    } else {
+                        Color::White
+                    }),
+                    stat.writes.to_string().with(if stat.writes > stat.reads {
+                        Color::Yellow
+                    } else {
+                        Color::White
+                    }),
+                    display_notes.with(Color::DarkGrey)
+                ),
+                crate::logging::LogLevel::Info,
             );
         }
-        println!();
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
     }
 
     /// Capture a snapshot of all storage entries from the host
@@ -404,21 +419,24 @@ impl StorageInspector {
     /// Display a color-coded storage diff
     pub fn display_diff(diff: &StorageDiff) {
         if diff.is_empty() {
-            println!("Storage: (no changes)");
+            crate::logging::log_display("Storage: (no changes)", crate::logging::LogLevel::Info);
             return;
         }
 
-        println!("Storage Changes:");
+        crate::logging::log_display("Storage Changes:", crate::logging::LogLevel::Info);
 
         // Sort keys for deterministic output
         let mut added_keys: Vec<_> = diff.added.keys().collect();
         added_keys.sort();
         for key in added_keys {
-            println!(
-                "  {} {} = {}",
-                "+".with(Color::Green),
-                key,
-                diff.added[key].clone().with(Color::Green)
+            crate::logging::log_display(
+                format!(
+                    "  {} {} = {}",
+                    "+".with(Color::Green),
+                    key,
+                    diff.added[key].clone().with(Color::Green)
+                ),
+                crate::logging::LogLevel::Info,
             );
         }
 
@@ -426,30 +444,42 @@ impl StorageInspector {
         modified_keys.sort();
         for key in modified_keys {
             let (old, new) = &diff.modified[key];
-            println!(
-                "  {} {}: {} -> {}",
-                "~".with(Color::Yellow),
-                key,
-                old.clone().with(Color::Red),
-                new.clone().with(Color::Green)
+            crate::logging::log_display(
+                format!(
+                    "  {} {}: {} -> {}",
+                    "~".with(Color::Yellow),
+                    key,
+                    old.clone().with(Color::Red),
+                    new.clone().with(Color::Green)
+                ),
+                crate::logging::LogLevel::Info,
             );
         }
 
         let mut deleted_keys = diff.deleted.clone();
         deleted_keys.sort();
         for key in deleted_keys {
-            println!("  {} {}", "-".with(Color::Red), key.with(Color::Red));
+            crate::logging::log_display(
+                format!("  {} {}", "-".with(Color::Red), key.with(Color::Red)),
+                crate::logging::LogLevel::Info,
+            );
         }
 
         if !diff.triggered_alerts.is_empty() {
-            println!(
-                "\n{}",
-                "!!! CRITICAL STORAGE ALERT !!!".with(Color::Red).bold()
+            crate::logging::log_display(
+                format!(
+                    "\n{}",
+                    "!!! CRITICAL STORAGE ALERT !!!".with(Color::Red).bold()
+                ),
+                crate::logging::LogLevel::Error,
             );
             let mut alerts = diff.triggered_alerts.clone();
             alerts.sort();
             for key in alerts {
-                println!("  {} was modified!", key.with(Color::Red).bold());
+                crate::logging::log_display(
+                    format!("  {} was modified!", key.with(Color::Red).bold()),
+                    crate::logging::LogLevel::Error,
+                );
             }
         }
     }

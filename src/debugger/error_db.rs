@@ -157,21 +157,48 @@ impl ErrorDatabase {
 
     pub fn display_error(&self, code: u32) {
         if let Some(explanation) = self.lookup(code) {
-            println!("\n=== Error Explanation ===");
-            println!("Error Code: {}", explanation.code);
-            println!("Error Name: {}", explanation.name);
-            println!("\nDescription:");
-            println!("  {}", explanation.description);
-            println!("\nCommon Cause:");
-            println!("  {}", explanation.common_cause);
-            println!("\nSuggested Fix:");
-            println!("  {}", explanation.suggested_fix);
-            println!();
+            crate::logging::log_display(
+                "\n=== Error Explanation ===",
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display(
+                format!("Error Code: {}", explanation.code),
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display(
+                format!("Error Name: {}", explanation.name),
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display("\nDescription:", crate::logging::LogLevel::Info);
+            crate::logging::log_display(
+                format!("  {}", explanation.description),
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display("\nCommon Cause:", crate::logging::LogLevel::Info);
+            crate::logging::log_display(
+                format!("  {}", explanation.common_cause),
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display("\nSuggested Fix:", crate::logging::LogLevel::Info);
+            crate::logging::log_display(
+                format!("  {}", explanation.suggested_fix),
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display("", crate::logging::LogLevel::Info);
         } else {
-            println!("\n=== Error Code: {} ===", code);
-            println!("No explanation available for this error code.");
-            println!("This may be a custom contract error. Check contract documentation.");
-            println!();
+            crate::logging::log_display(
+                format!("\n=== Error Code: {} ===", code),
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display(
+                "No explanation available for this error code.",
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display(
+                "This may be a custom contract error. Check contract documentation.",
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display("", crate::logging::LogLevel::Info);
         }
     }
 }
