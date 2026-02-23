@@ -68,26 +68,44 @@ impl InstructionCounter {
         let counts = self.get_counts();
 
         if counts.is_empty() {
-            println!("\n=== Instruction Counts ===");
-            println!("No function calls recorded.");
+            crate::logging::log_display(
+                "\n=== Instruction Counts ===",
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display(
+                "No function calls recorded.",
+                crate::logging::LogLevel::Info,
+            );
             return;
         }
 
-        println!("\n=== Instruction Counts per Function ===");
-        println!("{:<30} {:>15} {:>10}", "Function", "Instructions", "Calls");
-        println!("{}", "-".repeat(60));
+        crate::logging::log_display(
+            "\n=== Instruction Counts per Function ===",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!("{:<30} {:>15} {:>10}", "Function", "Instructions", "Calls"),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display("-".repeat(60), crate::logging::LogLevel::Info);
 
         for count in &counts {
-            println!(
-                "{:<30} {:>15} {:>10}",
-                count.function_name, count.instruction_count, count.call_count
+            crate::logging::log_display(
+                format!(
+                    "{:<30} {:>15} {:>10}",
+                    count.function_name, count.instruction_count, count.call_count
+                ),
+                crate::logging::LogLevel::Info,
             );
         }
 
         let total = self.get_total_instructions();
-        println!("{}", "-".repeat(60));
-        println!("{:<30} {:>15}", "Total", total);
-        println!();
+        crate::logging::log_display("-".repeat(60), crate::logging::LogLevel::Info);
+        crate::logging::log_display(
+            format!("{:<30} {:>15}", "Total", total),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
     }
 }
 

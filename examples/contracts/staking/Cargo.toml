@@ -29,3 +29,4 @@ inherits = "release"
 debug-assertions = true
 
 [workspace]
+debug-assertions = true

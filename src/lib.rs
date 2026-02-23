@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 pub mod analyzer;
 pub mod batch;
 pub mod cli;
@@ -15,6 +16,7 @@ pub mod profiler;
 pub mod repeat;
 pub mod repl;
 pub mod runtime;
+pub mod scenario;
 pub mod server;
 pub mod simulator;
 pub mod ui;

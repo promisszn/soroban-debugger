@@ -22,6 +22,7 @@ pub struct DebuggerEngine {
 
 impl DebuggerEngine {
     /// Create a new debugger engine.
+    #[tracing::instrument(skip_all)]
     pub fn new(executor: ContractExecutor, initial_breakpoints: Vec<String>) -> Self {
         let mut breakpoints = BreakpointManager::new();
 
@@ -75,6 +76,7 @@ impl DebuggerEngine {
     }
 
     /// Execute a contract function with debugging.
+    #[tracing::instrument(skip(self), fields(function = function))]
     pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<String> {
         info!("Executing function: {}", function);
 
@@ -95,7 +97,7 @@ impl DebuggerEngine {
         self.update_call_stack(duration)?;
 
         if let Err(ref e) = result {
-            println!("\n[ERROR] Execution failed: {}", e);
+            tracing::error!("Execution failed: {}", e);
             if let Ok(state) = self.state.lock() {
                 state.call_stack().display();
             }

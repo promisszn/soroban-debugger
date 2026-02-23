@@ -1,73 +1,76 @@
-ie \n(.g .ds Aq \(aq
+.ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH run 1  "run " 
+.TH soroban-debug 1  "soroban-debug 0.1.0" 
 .SH NAME
-run \- Run a contract function with the debugger
+soroban\-debug \- A debugger for Soroban smart contracts
 .SH SYNOPSIS
-\fBrun\fR <\fB\-c\fR|\fB\-\-contract\fR> <\fB\-f\fR|\fB\-\-function\fR> [\fB\-a\fR|\fB\-\-args\fR] [\fB\-s\fR|\fB\-\-storage\fR] [\fB\-b\fR|\fB\-\-breakpoint\fR] [\fB\-\-network\-snapshot\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-output\fR] [\fB\-\-show\-events\fR] [\fB\-\-show\-auth\fR] [\fB\-\-filter\-topic\fR] [\fB\-\-repeat\fR] [\fB\-\-mock\fR] [\fB\-\-storage\-filter\fR] [\fB\-\-instruction\-debug\fR] [\fB\-\-step\-instructions\fR] [\fB\-\-step\-mode\fR] [\fB\-\-dry\-run\fR] [\fB\-\-export\-storage\fR] [\fB\-\-import\-storage\fR] [\fB\-\-batch\-args\fR] [\fB\-\-generate\-test\fR] [\fB\-\-overwrite\fR] [\fB\-\-timeout\fR] [\fB\-\-alert\-on\-change\fR] [\fB\-\-expected\-hash\fR] [\fB\-\-show\-ledger\fR] [\fB\-\-ttl\-warning\-threshold\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBsoroban\-debug\fR [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-no\-banner\fR] [\fB\-\-budget\-trend\fR] [\fB\-\-trend\-contract\fR] [\fB\-\-trend\-function\fR] [\fB\-\-version\-verbose\fR] [\fB\-\-list\-functions\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
 .SH DESCRIPTION
-Run a contract function with the debugger
+A debugger for Soroban smart contracts
 .SH OPTIONS
 .TP
-\fB\-c\fR, \fB\-\-contract\fR \fI<CONTRACT>\fR
-Path to the contract WASM file
-.TP
-\fB\-f\fR, \fB\-\-function\fR \fI<FUNCTION>\fR
-Function name to execute
-.TP
-\fB\-a\fR, \fB\-\-args\fR \fI<ARGS>\fR
-Function arguments as JSON array (e.g., \*(Aq["arg1", "arg2"]\*(Aq)
-.TP
-\fB\-s\fR, \fB\-\-storage\fR \fI<STORAGE>\fR
-Initial storage state as JSON object
-.TP
-\fB\-b\fR, \fB\-\-breakpoint\fR \fI<BREAKPOINT>\fR
-Set breakpoint at function name
-.TP
-\fB\-\-network\-snapshot\fR \fI<NETWORK_SNAPSHOT>\fR
-Network snapshot file to load before execution
+\fB\-q\fR, \fB\-\-quiet\fR
+Suppress non\-essential output (errors and return value only)
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
-Enable verbose output
+Show verbose output including internal details
 .TP
-\fB\-\-output\fR \fI<OUTPUT>\fR [default: pretty]
-Output format: pretty (default) or json
-.br
-
-.br
-[\fIpossible values: \fRpretty, json]
+\fB\-\-no\-banner\fR
+Suppress startup banner output
 .TP
-\fB\-\-show\-events\fR
-Show contract events emitted during execution
+\fB\-\-budget\-trend\fR
+Show historical budget trend visualization
 .TP
-\fB\-\-show\-auth\fR
-Show authorization tree during execution
+\fB\-\-trend\-contract\fR \fI<TREND_CONTRACT>\fR
+Filter budget trend by contract hash
 .TP
-\fB\-\-filter\-topic\fR \fI<FILTER_TOPIC>\fR
-Filter events by topic
+\fB\-\-trend\-function\fR \fI<TREND_FUNCTION>\fR
+Filter budget trend by function name
 .TP
-\fB\-\-repeat\fR \fI<REPEAT>\fR
-Execute the contract call N times for stress testing
+\fB\-\-version\-verbose\fR
+Show detailed version information
 .TP
-\fB\-\-mock\fR \fI<CONTRACT_ID.function=return_value>\fR
-Mock cross\-contract return: CONTRACT_ID.function=return_value (repeatable)
+\fB\-\-list\-functions\fR \fI<LIST_FUNCTIONS>\fR
+Show exported functions for a given contract (shorthand for inspect \-\-functions)
 .TP
-\fB\-\-storage\-filter\fR \fI<PATTERN>\fR
-Filter storage output by key pattern (repeatable). Supports: prefix*       — match keys starting with prefix re:<regex>    — match keys by regex exact_key     — match key exactly
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .TP
-\fB\-\-instruction\-debug\fR
-Enable instruction\-level debugging
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
 .TP
-\fB\-\-step\-instructions\fR
-Start with instruction stepping enabled
+soroban\-debug\-run(1)
+Run a contract function with the debugger
 .TP
-\fB\-\-step\-mode\fR \fI<STEP_MODE>\fR [default: into]
-Step mode for instruction debugging (into, over, out, block)
+soroban\-debug\-interactive(1)
+Start an interactive debugging session
 .TP
-\fB\-\-dry\-run\fR
-Execute contract in dry\-run mode: simulate execution without persisting storage changes
+soroban\-debug\-repl(1)
+Start an interactive REPL for contract exploration
 .TP
-\fB\-\-export\-storage\fR \fI<EXPORT_STORAGE>\fR
+soroban\-debug\-tui(1)
+Launch the full\-screen TUI dashboard
+.TP
+soroban\-debug\-inspect(1)
+Inspect contract information without executing
+.TP
+soroban\-debug\-completions(1)
+Generate shell completion scripts
+.TP
+soroban\-debug\-optimize(1)
+Analyze contract and generate gas optimization suggestions
+.TP
+soroban\-debug\-profile(1)
+Profile a single function execution and print hotspots + suggestions
+.TP
+soroban\-debug\-upgrade\-check(1)
+Check compatibility between two contract versions
+.TP
+soroban\-debug\-compare(1)
+Compare two execution trace JSON files side\-by\-side
+.TP
+soroban\-debug\-replay(1)
 Replay execution from a previously exported trace file
 .TP
 soroban\-debug\-symbolic(1)
@@ -81,6 +84,9 @@ Connect to remote debug server
 .TP
 soroban\-debug\-analyze(1)
 Analyze contract for security vulnerabilities
+.TP
+soroban\-debug\-scenario(1)
+Run a multi\-step scenario from a TOML file
 .TP
 soroban\-debug\-help(1)
 Print this message or the help of the given subcommand(s)
