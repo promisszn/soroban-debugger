@@ -74,7 +74,7 @@ fn test_parse_bool_typed() {
 
 #[test]
 fn test_parse_symbol_bare() {
-   let parser = create_parser();
+    let parser = create_parser();
     let result = parser.parse_args_string(r#"["hello"]"#);
     assert!(result.is_ok());
     assert_eq!(result.unwrap().len(), 1);
@@ -103,7 +103,11 @@ fn test_parse_string_typed() {
 fn test_parse_option_none_from_null() {
     let parser = create_parser();
     let result = parser.parse_args_string(r#"[{"type": "option", "value": null}]"#);
-    assert!(result.is_ok(), "Failed to parse option none: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse option none: {:?}",
+        result.err()
+    );
     assert_eq!(result.unwrap().len(), 1);
 }
 
@@ -111,7 +115,11 @@ fn test_parse_option_none_from_null() {
 fn test_parse_option_some_from_non_null() {
     let parser = create_parser();
     let result = parser.parse_args_string(r#"[{"type": "option", "value": 42}]"#);
-    assert!(result.is_ok(), "Failed to parse option some: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse option some: {:?}",
+        result.err()
+    );
     assert_eq!(result.unwrap().len(), 1);
 }
 
@@ -127,8 +135,7 @@ fn test_parse_fixed_length_tuple() {
 #[test]
 fn test_error_tuple_wrong_arity() {
     let parser = create_parser();
-    let result =
-        parser.parse_args_string(r#"[{"type": "tuple", "value": [1, 2, 3], "arity": 2}]"#);
+    let result = parser.parse_args_string(r#"[{"type": "tuple", "value": [1, 2, 3], "arity": 2}]"#);
     assert!(result.is_err());
 
     let err_msg = result.unwrap_err().to_string();
@@ -164,7 +171,9 @@ fn test_parse_transfer_args() {
     let result = parser.parse_args_string(
         r#"[{"type": "symbol", "value": "Alice"}, {"type": "symbol", "value": "Bob"}, {"type": "u64", "value": 100}]"#,
     );
-
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().len(), 3);
+}
 
 #[test]
 fn test_error_type_value_mismatch() {

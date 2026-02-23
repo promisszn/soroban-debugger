@@ -131,11 +131,18 @@ impl OutputWriter {
     pub fn new(path: Option<&std::path::Path>, append: bool) -> miette::Result<Self> {
         let file = if let Some(p) = path {
             if append {
-                Some(std::fs::OpenOptions::new().create(true).append(true).open(p)
-                    .map_err(|e| miette::miette!("Failed to open output file: {}", e))?)
+                Some(
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(p)
+                        .map_err(|e| miette::miette!("Failed to open output file: {}", e))?,
+                )
             } else {
-                Some(std::fs::File::create(p)
-                    .map_err(|e| miette::miette!("Failed to create output file: {}", e))?)
+                Some(
+                    std::fs::File::create(p)
+                        .map_err(|e| miette::miette!("Failed to create output file: {}", e))?,
+                )
             }
         } else {
             None

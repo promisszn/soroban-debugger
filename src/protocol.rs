@@ -1,18 +1,28 @@
-use serde::{Deserialize, Serialize};
 use crate::debugger::state::DebugState;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum DebugRequest {
-    Handshake { token: String },
+    Handshake {
+        token: String,
+    },
     Step,
     Continue,
-    AddBreakpoint { function: String },
-    RemoveBreakpoint { function: String },
+    AddBreakpoint {
+        function: String,
+    },
+    RemoveBreakpoint {
+        function: String,
+    },
     GetState,
-    Execute { function: String, args: Option<String> },
+    Execute {
+        function: String,
+        args: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum DebugResponse {
     Ok,
     Error(String),

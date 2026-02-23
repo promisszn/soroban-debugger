@@ -82,7 +82,10 @@ impl EventInspector {
         let mut out = Vec::new();
         for (i, ev) in events.iter().enumerate() {
             out.push(format!("Event #{}:", i));
-            out.push(format!("  Contract: {}", ev.contract_id.as_deref().unwrap_or("<none>")));
+            out.push(format!(
+                "  Contract: {}",
+                ev.contract_id.as_deref().unwrap_or("<none>")
+            ));
             out.push(format!("  Topics: {:?}", ev.topics));
             out.push(format!("  Data: {}", ev.data));
         }

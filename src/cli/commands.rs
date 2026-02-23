@@ -1,26 +1,22 @@
 use crate::analyzer::upgrade::{CompatibilityReport, ExecutionDiff, UpgradeAnalyzer};
 use crate::cli::args::{
-    AnalyzeArgs, CompareArgs, GraphFormat, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs,
-    RemoteArgs, ReplArgs, ReplayArgs, RunArgs, ScenarioArgs, ServerArgs, SymbolicArgs, TuiArgs,
+    AnalyzeArgs, CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RemoteArgs,
+    ReplArgs, ReplayArgs, RunArgs, ScenarioArgs, ServerArgs, SymbolicArgs, TuiArgs,
     UpgradeCheckArgs, Verbosity,
 };
 use crate::debugger::engine::DebuggerEngine;
 use crate::debugger::instruction_pointer::StepMode;
-use crate::history::{check_regression, HistoryManager, RunHistory};
+use crate::history::{HistoryManager, RunHistory};
+use crate::inspector::events::{ContractEvent, EventInspector};
 use crate::logging;
-use crate::output::{OutputConfig, OutputWriter};
+use crate::output::OutputWriter;
 use crate::repeat::RepeatRunner;
 use crate::runtime::executor::ContractExecutor;
 use crate::simulator::SnapshotLoader;
 use crate::ui::formatter::Formatter;
-use crate::ui::tui::DebuggerUI;
 use crate::{DebuggerError, Result};
 use miette::WrapErr;
-use serde::Serialize;
 use std::fs;
-use std::io::Write;
-use textplots::{Chart, Plot, Shape};
-use crate::inspector::events::{ContractEvent, EventInspector};
 
 fn print_info(message: impl AsRef<str>) {
     if !Formatter::is_quiet() {
@@ -52,14 +48,12 @@ fn print_verbose(message: impl AsRef<str>) {
     }
 }
 
-/// Placeholder for dry-run mode
-fn run_dry_run(_args: &RunArgs) -> Result<()> {
-    print_info("Dry-run mode is not yet implemented");
-    Ok(())
-}
-
 /// Placeholder for instruction stepping
-fn run_instruction_stepping(_engine: &mut DebuggerEngine, _function: &str, _args: Option<&str>) -> Result<()> {
+fn run_instruction_stepping(
+    _engine: &mut DebuggerEngine,
+    _function: &str,
+    _args: Option<&str>,
+) -> Result<()> {
     print_info("Instruction stepping is not yet fully implemented");
     Ok(())
 }
@@ -89,7 +83,11 @@ fn display_mock_call_log(calls: &[crate::runtime::executor::MockCallEntry]) {
             status,
             entry.function,
             entry.args_count,
-            if entry.returned.is_some() { "returned" } else { "pending" }
+            if entry.returned.is_some() {
+                "returned"
+            } else {
+                "pending"
+            }
         ));
     }
 }
@@ -287,11 +285,17 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
 
     // Server and remote modes are not yet implemented
     if args.server {
-        return Err(DebuggerError::ExecutionError("Server mode not yet implemented in run command".to_string()).into());
+        return Err(DebuggerError::ExecutionError(
+            "Server mode not yet implemented in run command".to_string(),
+        )
+        .into());
     }
 
     if args.remote.is_some() {
-        return Err(DebuggerError::ExecutionError("Remote mode not yet implemented in run command".to_string()).into());
+        return Err(DebuggerError::ExecutionError(
+            "Remote mode not yet implemented in run command".to_string(),
+        )
+        .into());
     }
 
     // Execute locally with debugging
@@ -370,7 +374,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
         };
         let _ = manager.append_record(record);
     }
-    let json_memory_summary = engine.executor().last_memory_summary().cloned();
+    let _json_memory_summary = engine.executor().last_memory_summary().cloned();
 
     // Export storage if specified
     if let Some(export_path) = &args.export_storage {
@@ -392,25 +396,27 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
 
         // Convert runtime event objects into our inspector::events::ContractEvent via serde translation.
         // This is a generic, safe conversion as long as runtime events are serializable with sensible fields.
-        let converted_events: Vec<ContractEvent> = match serde_json::to_value(&raw_events)
-            .and_then(|v| serde_json::from_value(v))
-        {
-            Ok(evts) => evts,
-            Err(e) => {
-                // If conversion fails, fall back to attempting to stringify each raw event for display.
-                print_warning(format!("Failed to convert runtime events for structured display: {}", e));
-                // Fallback: attempt a best-effort stringification
-                let fallback: Vec<ContractEvent> = raw_events
-                    .into_iter()
-                    .map(|r| ContractEvent {
-                        contract_id: None,
-                        topics: vec![],
-                        data: format!("{:?}", r),
-                    })
-                    .collect();
-                fallback
-            }
-        };
+        let converted_events: Vec<ContractEvent> =
+            match serde_json::to_value(&raw_events).and_then(serde_json::from_value) {
+                Ok(evts) => evts,
+                Err(e) => {
+                    // If conversion fails, fall back to attempting to stringify each raw event for display.
+                    print_warning(format!(
+                        "Failed to convert runtime events for structured display: {}",
+                        e
+                    ));
+                    // Fallback: attempt a best-effort stringification
+                    let fallback: Vec<ContractEvent> = raw_events
+                        .into_iter()
+                        .map(|r| ContractEvent {
+                            contract_id: None,
+                            topics: vec![],
+                            data: format!("{:?}", r),
+                        })
+                        .collect();
+                    fallback
+                }
+            };
 
         // Determine filter: prefer repeatable --event-filter, fallback to legacy --filter-topic
         let filter_opt = if !args.event_filter.is_empty() {
@@ -532,20 +538,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
         });
 
         if let Some(ref events) = json_events {
-            output["events"] = serde_json::Value::Array(
-                events
-                    .iter()
-                    .map(|event| {
-                        serde_json::json!({
-                            "contract_id": event.contract_id,
-                            "topics": event.topics,
-                            "data": event.data,
-                        })
-                    })
-                    .collect(),
-            );
-        if let Some(events) = json_events {
-            output["events"] = EventInspector::to_json_value(&events);
+            output["events"] = EventInspector::to_json_value(events);
         }
         if let Some(auth_tree) = json_auth {
             output["auth"] = crate::inspector::auth::AuthInspector::to_json_value(&auth_tree);
@@ -581,9 +574,12 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     if let Some(trace_path) = &args.trace_output {
         print_info(format!("\nExporting execution trace to: {:?}", trace_path));
 
-        let args_str = parsed_args.as_ref().map(|a| serde_json::to_string(a).unwrap_or_default());
-        
-        let trace_events = json_events.unwrap_or_else(|| engine.executor().get_events().unwrap_or_default());
+        let args_str = parsed_args
+            .as_ref()
+            .map(|a| serde_json::to_string(a).unwrap_or_default());
+
+        let trace_events =
+            json_events.unwrap_or_else(|| engine.executor().get_events().unwrap_or_default());
 
         let trace = build_execution_trace(
             &args.function,
@@ -609,6 +605,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_execution_trace(
     function: &str,
     contract_path: &str,
@@ -629,11 +626,12 @@ fn build_execution_trace(
         }
     }
 
-    let return_val = serde_json::from_str(result).unwrap_or_else(|_| serde_json::Value::String(result.to_string()));
+    let return_val = serde_json::from_str(result)
+        .unwrap_or_else(|_| serde_json::Value::String(result.to_string()));
 
     let mut call_sequence = Vec::new();
     let mut depth = 0;
-    
+
     call_sequence.push(crate::compare::trace::CallEntry {
         function: function.to_string(),
         args: args_str.clone(),
@@ -648,14 +646,18 @@ fn build_execution_trace(
             }
 
             let event_str = format!("{:?}", event);
-            if event_str.contains("ContractCall") || (event_str.contains("call") && event.contract_id.is_some()) {
+            if event_str.contains("ContractCall")
+                || (event_str.contains("call") && event.contract_id.is_some())
+            {
                 depth += 1;
                 call_sequence.push(crate::compare::trace::CallEntry {
                     function: "nested_call".to_string(),
                     args: None,
                     depth,
                 });
-            } else if (event_str.contains("ContractReturn") || event_str.contains("return")) && depth > 0 {
+            } else if (event_str.contains("ContractReturn") || event_str.contains("return"))
+                && depth > 0
+            {
                 depth -= 1;
             }
         }
@@ -704,46 +706,37 @@ fn run_dry_run(args: &RunArgs) -> Result<()> {
                 actual: wasm_hash.clone(),
             }
             .into());
-        if let Some(memory_summary) = json_memory_summary {
-            output["memory_summary"] = serde_json::to_value(memory_summary).map_err(|e| {
-                DebuggerError::FileError(format!("Failed to serialize memory summary: {}", e))
-            })?;
         }
-
-        let json_output = serde_json::to_string_pretty(&output).map_err(|e| {
-            DebuggerError::FileError(format!("Failed to serialize output: {}", e))
-        })?;
-        logging::log_display(&json_output, logging::LogLevel::Info);
-        output_writer.write(&json_output)?;
     }
 
-    // Show confirmation message if file was written
-    if let Some(output_path) = &args.save_output {
-        print_success(format!(
-            "\n✓ Output saved to: {}",
-            output_path.display()
-        ));
+    print_success(format!(
+        "[DRY RUN] Contract loaded successfully ({} bytes)",
+        wasm_bytes.len()
+    ));
+
+    if args.verbose {
+        print_verbose(format!("[DRY RUN] SHA-256: {}", wasm_hash));
+        if args.expected_hash.is_some() {
+            print_verbose("[DRY RUN] Checksum verified ✓");
+        }
     }
 
-    // Display instruction count per function if available
-    if let Some(instr_counts) = get_instruction_counts(&engine) {
-        display_instruction_counts(&instr_counts);
-    }
+    print_info("[DRY RUN] Skipping execution");
 
     Ok(())
 }
 
 /// Get instruction counts from the debugger engine
-fn get_instruction_counts(engine: &DebuggerEngine) -> Option<crate::runtime::executor::InstructionCounts> {
+#[allow(dead_code)]
+fn get_instruction_counts(
+    engine: &DebuggerEngine,
+) -> Option<crate::runtime::executor::InstructionCounts> {
     // Try to get instruction counts from the executor
-    if let Ok(counts) = engine.executor().get_instruction_counts() {
-        Some(counts)
-    } else {
-        None
-    }
+    engine.executor().get_instruction_counts().ok()
 }
 
 /// Display instruction counts per function in a formatted table
+#[allow(dead_code)]
 fn display_instruction_counts(counts: &crate::runtime::executor::InstructionCounts) {
     if counts.function_counts.is_empty() {
         return;
@@ -789,7 +782,7 @@ fn display_instruction_counts(counts: &crate::runtime::executor::InstructionCoun
         width3 = 10
     );
     print_info(&header);
-    print_info(&"-".repeat(header.len()));
+    print_info("-".repeat(header.len()));
 
     // Print rows
     for ((func_name, count), percentage) in counts.function_counts.iter().zip(percentages.iter()) {
@@ -803,22 +796,6 @@ fn display_instruction_counts(counts: &crate::runtime::executor::InstructionCoun
         );
         print_info(&row);
     }
-}
-
-/// Parse JSON arguments into a string for now (will be improved later)
-pub fn parse_args(json: &str) -> Result<String> {
-    // Basic validation
-    serde_json::from_str::<serde_json::Value>(json)
-        .map_err(|e| miette::miette!("Invalid JSON arguments '{}': {}", json, e))?;
-    Ok(json.to_string())
-}
-
-/// Parse JSON storage into a string for now (will be improved later)
-fn parse_storage(json: &str) -> Result<String> {
-    // Basic validation
-    serde_json::from_str::<serde_json::Value>(json)
-        .map_err(|e| miette::miette!("Invalid JSON storage '{}': {}", json, e))?;
-    Ok(json.to_string())
 }
 
 /// Execute the upgrade-check command
@@ -841,7 +818,8 @@ pub fn upgrade_check(args: UpgradeCheckArgs) -> Result<()> {
     let old_path = args.old.to_string_lossy().to_string();
     let new_path = args.new.to_string_lossy().to_string();
 
-    let report = UpgradeAnalyzer::analyze(&old_wasm, &new_wasm, &old_path, &new_path, execution_diffs)?;
+    let report =
+        UpgradeAnalyzer::analyze(&old_wasm, &new_wasm, &old_path, &new_path, execution_diffs)?;
 
     let output = match args.output.as_str() {
         "json" => serde_json::to_string_pretty(&report)
@@ -858,7 +836,10 @@ pub fn upgrade_check(args: UpgradeCheckArgs) -> Result<()> {
     }
 
     if !report.is_compatible {
-        return Err(miette::miette!("Contracts are not compatible: {} breaking change(s) detected", report.breaking_changes.len()));
+        return Err(miette::miette!(
+            "Contracts are not compatible: {} breaking change(s) detected",
+            report.breaking_changes.len()
+        ));
     }
 
     Ok(())
@@ -924,11 +905,18 @@ fn format_text_report(report: &CompatibilityReport) -> String {
     out.push_str(&format!("New: {}\n", report.new_wasm_path));
     out.push('\n');
 
-    let status = if report.is_compatible { "COMPATIBLE" } else { "INCOMPATIBLE" };
+    let status = if report.is_compatible {
+        "COMPATIBLE"
+    } else {
+        "INCOMPATIBLE"
+    };
     out.push_str(&format!("Status: {}\n", status));
 
     out.push('\n');
-    out.push_str(&format!("Breaking Changes ({}):\n", report.breaking_changes.len()));
+    out.push_str(&format!(
+        "Breaking Changes ({}):\n",
+        report.breaking_changes.len()
+    ));
     if report.breaking_changes.is_empty() {
         out.push_str("  (none)\n");
     } else {
@@ -938,7 +926,10 @@ fn format_text_report(report: &CompatibilityReport) -> String {
     }
 
     out.push('\n');
-    out.push_str(&format!("Non-Breaking Changes ({}):\n", report.non_breaking_changes.len()));
+    out.push_str(&format!(
+        "Non-Breaking Changes ({}):\n",
+        report.non_breaking_changes.len()
+    ));
     if report.non_breaking_changes.is_empty() {
         out.push_str("  (none)\n");
     } else {
@@ -949,9 +940,16 @@ fn format_text_report(report: &CompatibilityReport) -> String {
 
     if !report.execution_diffs.is_empty() {
         out.push('\n');
-        out.push_str(&format!("Execution Diffs ({}):\n", report.execution_diffs.len()));
+        out.push_str(&format!(
+            "Execution Diffs ({}):\n",
+            report.execution_diffs.len()
+        ));
         for diff in &report.execution_diffs {
-            let match_str = if diff.outputs_match { "MATCH" } else { "MISMATCH" };
+            let match_str = if diff.outputs_match {
+                "MATCH"
+            } else {
+                "MISMATCH"
+            };
             out.push_str(&format!(
                 "  {} args={} OLD={} NEW={} [{}]\n",
                 diff.function, diff.args, diff.old_result, diff.new_result, match_str
@@ -959,7 +957,29 @@ fn format_text_report(report: &CompatibilityReport) -> String {
         }
     }
 
-    Ok(())
+    out.push('\n');
+    let old_names: Vec<&str> = report
+        .old_functions
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect();
+    let new_names: Vec<&str> = report
+        .new_functions
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect();
+    out.push_str(&format!(
+        "Old Functions ({}): {}\n",
+        old_names.len(),
+        old_names.join(", ")
+    ));
+    out.push_str(&format!(
+        "New Functions ({}): {}\n",
+        new_names.len(),
+        new_names.join(", ")
+    ));
+
+    out
 }
 
 /// Parse JSON arguments with validation.
@@ -1199,70 +1219,6 @@ pub fn profile(args: ProfileArgs) -> Result<()> {
     Ok(())
 }
 
-/// Execute the upgrade-check command.
-/// Execute the upgrade-check command
-pub fn upgrade_check(args: UpgradeCheckArgs, _verbosity: Verbosity) -> Result<()> {
-    print_info("Comparing contracts...");
-    print_info(format!("  Old: {:?}", args.old));
-    print_info(format!("  New: {:?}", args.new));
-    logging::log_contract_comparison(&args.old.to_string_lossy(), &args.new.to_string_lossy());
-
-    let old_bytes = fs::read(&args.old).map_err(|e| {
-        DebuggerError::WasmLoadError(format!(
-            "Failed to read old WASM file at {:?}: {}",
-            args.old, e
-        ))
-    })?;
-    let new_bytes = fs::read(&args.new).map_err(|e| {
-        DebuggerError::WasmLoadError(format!(
-            "Failed to read new WASM file at {:?}: {}",
-            args.new, e
-        ))
-    })?;
-
-    print_success(format!(
-        "Loaded contracts (Old: {} bytes, New: {} bytes)",
-        old_bytes.len(),
-        new_bytes.len()
-    ));
-
-    print_info("Running analysis...");
-    tracing::info!(
-        old_size = old_bytes.len(),
-        new_size = new_bytes.len(),
-        "Loaded contracts for comparison"
-    );
-
-    let analyzer = crate::analyzer::upgrade::UpgradeAnalyzer::new();
-    logging::log_analysis_start("contract upgrade compatibility check");
-    let report = analyzer.analyze(
-        &old_bytes,
-        &new_bytes,
-        args.function.as_deref(),
-        args.args.as_deref(),
-    )?;
-
-    let markdown = analyzer.generate_markdown_report(&report);
-
-    if let Some(output_path) = &args.output {
-        fs::write(output_path, &markdown).map_err(|e| {
-            DebuggerError::FileError(format!(
-                "Failed to write report to {:?}: {}",
-                output_path, e
-            ))
-        })?;
-        print_success(format!(
-            "\nCompatibility report written to: {:?}",
-            output_path
-        ));
-        logging::log_optimization_report(&output_path.to_string_lossy());
-    } else {
-        logging::log_display(&markdown, logging::LogLevel::Info);
-    }
-
-    Ok(())
-}
-
 /// Execute the compare command.
 pub fn compare(args: CompareArgs) -> Result<()> {
     print_info(format!("Loading trace A: {:?}", args.trace_a));
@@ -1373,7 +1329,7 @@ pub fn replay(args: ReplayArgs, verbosity: Verbosity) -> Result<()> {
     let storage_after = engine.executor().get_storage_snapshot()?;
     let trace_events = engine.executor().get_events().unwrap_or_default();
     let budget = crate::inspector::budget::BudgetInspector::get_cpu_usage(engine.executor().host());
-    
+
     let replayed_trace = build_execution_trace(
         function,
         &contract_path.to_string_lossy(),
@@ -1399,7 +1355,10 @@ pub fn replay(args: ReplayArgs, verbosity: Verbosity) -> Result<()> {
 
     if let Some(output_path) = &args.output {
         std::fs::write(output_path, &rendered).map_err(|e| {
-            DebuggerError::FileError(format!("Failed to write report to {:?}: {}", output_path, e))
+            DebuggerError::FileError(format!(
+                "Failed to write report to {:?}: {}",
+                output_path, e
+            ))
         })?;
         print_success(format!("\nReplay report written to: {:?}", output_path));
     } else {
@@ -1424,13 +1383,6 @@ pub fn replay(args: ReplayArgs, verbosity: Verbosity) -> Result<()> {
     }
 
     Ok(())
-    out.push('\n');
-    let old_names: Vec<&str> = report.old_functions.iter().map(|f| f.name.as_str()).collect();
-    let new_names: Vec<&str> = report.new_functions.iter().map(|f| f.name.as_str()).collect();
-    out.push_str(&format!("Old Functions ({}): {}\n", old_names.len(), old_names.join(", ")));
-    out.push_str(&format!("New Functions ({}): {}\n", new_names.len(), new_names.join(", ")));
-
-    out
 }
 
 /// Start debug server for remote connections
@@ -1477,41 +1429,16 @@ pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
         let sigs = crate::utils::wasm::parse_function_signatures(&bytes)?;
         println!("Exported functions:");
         for sig in &sigs {
-            let params: Vec<String> = sig.params.iter().map(|p| format!("{}: {}", p.name, p.type_name)).collect();
+            let params: Vec<String> = sig
+                .params
+                .iter()
+                .map(|p| format!("{}: {}", p.name, p.type_name))
+                .collect();
             let ret = sig.return_type.as_deref().unwrap_or("()");
             println!("  {}({}) -> {}", sig.name, params.join(", "), ret);
         }
     }
     Ok(())
-}
-
-/// Optimize a WASM contract
-pub fn optimize(args: OptimizeArgs, _verbosity: Verbosity) -> Result<()> {
-    print_info("Optimize mode is not yet implemented in this build");
-    print_info(format!("Contract: {:?}", args.contract));
-    Err(DebuggerError::ExecutionError("Optimize mode not yet implemented".to_string()).into())
-}
-
-/// Compare two execution traces
-pub fn compare(args: CompareArgs) -> Result<()> {
-    print_info("Compare mode is not yet implemented in this build");
-    print_info(format!("Trace A: {:?}", args.trace_a));
-    print_info(format!("Trace B: {:?}", args.trace_b));
-    Err(DebuggerError::ExecutionError("Compare mode not yet implemented".to_string()).into())
-}
-
-/// Replay a recorded execution trace
-pub fn replay(args: ReplayArgs, _verbosity: Verbosity) -> Result<()> {
-    print_info("Replay mode is not yet implemented in this build");
-    print_info(format!("Trace: {:?}", args.trace_file));
-    Err(DebuggerError::ExecutionError("Replay mode not yet implemented".to_string()).into())
-}
-
-/// Profile contract execution
-pub fn profile(args: ProfileArgs) -> Result<()> {
-    print_info("Profile mode is not yet implemented in this build");
-    print_info(format!("Contract: {:?}", args.contract));
-    Err(DebuggerError::ExecutionError("Profile mode not yet implemented".to_string()).into())
 }
 
 /// Run symbolic execution analysis

@@ -1,10 +1,10 @@
-use crate::{DebuggerError, Result};
 use crate::analyzer::upgrade::WasmType;
-use wasmparser::{CompositeType, Parser, Payload, TypeRef, ValType};
+use crate::{DebuggerError, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
+use wasmparser::{Parser, Payload, ValType};
 
 // Re-export FunctionSignature for convenience
 pub use crate::analyzer::upgrade::FunctionSignature;
@@ -570,6 +570,7 @@ pub fn parse_function_signatures(wasm_bytes: &[u8]) -> Result<Vec<ContractFuncti
     Ok(signatures)
 }
 
+#[allow(dead_code)]
 fn val_type_to_wasm_type(vt: &ValType) -> WasmType {
     match vt {
         ValType::I32 => WasmType::I32,

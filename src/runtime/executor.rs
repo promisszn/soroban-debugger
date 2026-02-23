@@ -1,8 +1,8 @@
+use crate::inspector::budget::{MemorySummary, MemoryTracker};
 use crate::runtime::mocking::MockRegistry;
 use crate::utils::ArgumentParser;
 use crate::{runtime::mocking::MockCallLogEntry, runtime::mocking::MockContractDispatcher};
 use crate::{DebuggerError, Result};
-use crate::inspector::budget::{MemorySummary, MemoryTracker};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use soroban_env_host::xdr::ScVal;

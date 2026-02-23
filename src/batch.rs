@@ -24,7 +24,6 @@ pub struct BatchItem {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum BatchItemInput {
-    RawArgs(Value),
     Structured {
         args: Value,
         #[serde(default)]
@@ -32,6 +31,7 @@ enum BatchItemInput {
         #[serde(default)]
         label: Option<String>,
     },
+    RawArgs(Value),
 }
 
 /// Result of a single batch execution
@@ -182,8 +182,6 @@ impl BatchExecutor {
 
             let default_label = format!("Test #{}", result.index);
             let label = result.label.as_deref().unwrap_or(&default_label);
-            let expected = result.expected.as_deref().unwrap_or("-");
-
             crate::logging::log_display(
                 format!("\n{} {}", status, label),
                 crate::logging::LogLevel::Info,
@@ -298,6 +296,7 @@ fn json_value_to_text(value: Value) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn truncate_for_table(value: &str, limit: usize) -> String {
     if value.chars().count() <= limit {
         return value.to_string();
@@ -334,7 +333,7 @@ mod tests {
     #[test]
     fn test_batch_summary() {
         let results = vec![
-           BatchResult {
+            BatchResult {
                 index: 1,
                 label: None,
                 args: "[]".to_string(),
@@ -344,6 +343,17 @@ mod tests {
                 expected: Some("ok".to_string()),
                 passed: false,
                 duration_ms: 15,
+            },
+            BatchResult {
+                index: 2,
+                label: None,
+                args: "[]".to_string(),
+                result: "ok".to_string(),
+                success: true,
+                error: None,
+                expected: Some("ok".to_string()),
+                passed: true,
+                duration_ms: 10,
             },
         ];
 

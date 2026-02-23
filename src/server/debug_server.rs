@@ -9,7 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
 use tokio_rustls::TlsAcceptor;
-use tracing::{info, error, warn};
+use tracing::{error, info, warn};
 
 pub struct DebugServer {
     engine: DebuggerEngine,
@@ -39,14 +39,20 @@ impl DebugServer {
 
     pub async fn run(mut self, port: u16) -> Result<()> {
         let addr = format!("0.0.0.0:{}", port);
-        let listener = TcpListener::bind(&addr).await
+        let listener = TcpListener::bind(&addr)
+            .await
             .map_err(|e| miette::miette!("Failed to bind to {}: {}", addr, e))?;
         info!("Debug server listening on {}", addr);
 
-        let acceptor = self.tls_config.take().map(|cfg| TlsAcceptor::from(Arc::new(cfg)));
+        let acceptor = self
+            .tls_config
+            .take()
+            .map(|cfg| TlsAcceptor::from(Arc::new(cfg)));
 
         loop {
-            let (stream, addr) = listener.accept().await
+            let (stream, addr) = listener
+                .accept()
+                .await
                 .map_err(|e| miette::miette!("Failed to accept connection: {}", e))?;
             info!("New connection from {}", addr);
 
@@ -59,22 +65,23 @@ impl DebugServer {
                     }
                     Err(e) => error!("TLS accept error: {}", e),
                 }
-            } else {
-                if let Err(e) = self.handle_single_connection(stream).await {
-                    error!("TCP connection error: {}", e);
-                }
+            } else if let Err(e) = self.handle_single_connection(stream).await {
+                error!("TCP connection error: {}", e);
             }
         }
     }
 
-    async fn handle_single_connection<S>(&mut self, mut stream: S) -> Result<()> 
-    where S: AsyncReadExt + AsyncWriteExt + Unpin 
+    async fn handle_single_connection<S>(&mut self, mut stream: S) -> Result<()>
+    where
+        S: AsyncReadExt + AsyncWriteExt + Unpin,
     {
         let mut authenticated = false;
         let mut buffer = vec![0u8; 8192];
 
         loop {
-            let n = stream.read(&mut buffer).await
+            let n = stream
+                .read(&mut buffer)
+                .await
                 .map_err(|e| miette::miette!("Failed to read from stream: {}", e))?;
             if n == 0 {
                 break;
@@ -90,7 +97,10 @@ impl DebugServer {
             info!("Received request: {:?}", request);
 
             if !authenticated {
-                if let DebugRequest::Handshake { token: ref req_token } = request {
+                if let DebugRequest::Handshake {
+                    token: ref req_token,
+                } = request
+                {
                     if req_token == &self.token {
                         authenticated = true;
                         send_response(&mut stream, DebugResponse::AuthSuccess).await?;
@@ -100,25 +110,27 @@ impl DebugServer {
                         return Ok(());
                     }
                 } else {
-                    send_response(&mut stream, DebugResponse::Error("Authentication required".to_string())).await?;
+                    send_response(
+                        &mut stream,
+                        DebugResponse::Error("Authentication required".to_string()),
+                    )
+                    .await?;
                     return Ok(());
                 }
             }
 
             let response = match request {
-                DebugRequest::Handshake { .. } => DebugResponse::Error("Already authenticated".to_string()),
-                DebugRequest::Step => {
-                    match self.engine.step() {
-                        Ok(_) => DebugResponse::Ok,
-                        Err(e) => DebugResponse::Error(e.to_string()),
-                    }
+                DebugRequest::Handshake { .. } => {
+                    DebugResponse::Error("Already authenticated".to_string())
                 }
-                DebugRequest::Continue => {
-                    match self.engine.continue_execution() {
-                        Ok(_) => DebugResponse::Ok,
-                        Err(e) => DebugResponse::Error(e.to_string()),
-                    }
-                }
+                DebugRequest::Step => match self.engine.step() {
+                    Ok(_) => DebugResponse::Ok,
+                    Err(e) => DebugResponse::Error(e.to_string()),
+                },
+                DebugRequest::Continue => match self.engine.continue_execution() {
+                    Ok(_) => DebugResponse::Ok,
+                    Err(e) => DebugResponse::Error(e.to_string()),
+                },
                 DebugRequest::AddBreakpoint { function } => {
                     self.engine.breakpoints_mut().add(&function);
                     DebugResponse::Ok
@@ -146,12 +158,15 @@ impl DebugServer {
     }
 }
 
-async fn send_response<S>(stream: &mut S, response: DebugResponse) -> Result<()> 
-where S: AsyncWriteExt + Unpin
+async fn send_response<S>(stream: &mut S, response: DebugResponse) -> Result<()>
+where
+    S: AsyncWriteExt + Unpin,
 {
     let json = serde_json::to_vec(&response)
         .map_err(|e| miette::miette!("Failed to serialize response: {}", e))?;
-    stream.write_all(&json).await
+    stream
+        .write_all(&json)
+        .await
         .map_err(|e| miette::miette!("Failed to write response: {}", e))?;
     Ok(())
 }
@@ -174,7 +189,7 @@ fn load_tls_config(cert_path: &Path, key_path: &Path) -> Result<ServerConfig> {
     if keys.is_empty() {
         return Err(miette::miette!("No private key found"));
     }
-    let key  = PrivateKey(keys[0].clone());
+    let key = PrivateKey(keys[0].clone());
 
     let config = ServerConfig::builder()
         .with_safe_defaults()
@@ -184,4 +199,3 @@ fn load_tls_config(cert_path: &Path, key_path: &Path) -> Result<ServerConfig> {
 
     Ok(config)
 }
-

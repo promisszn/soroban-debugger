@@ -126,7 +126,7 @@ fn test_fixture_inspect_command() {
     // Should succeed and show functions
     cmd.assert()
         .success()
-        .stderr(predicates::str::contains("Exported Functions"));
+        .stdout(predicates::str::contains("Exported functions"));
 }
 
 #[test]
