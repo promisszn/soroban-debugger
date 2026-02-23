@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH scenario 1  "scenario " 
+.SH NAME
+scenario \- Run a multi\-step scenario from a TOML file
+.SH SYNOPSIS
+\fBscenario\fR <\fB\-\-scenario\fR> <\fB\-c\fR|\fB\-\-contract\fR> [\fB\-\-storage\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Run a multi\-step scenario from a TOML file
+.SH OPTIONS
+.TP
+\fB\-\-scenario\fR \fI<SCENARIO>\fR
+Path to the scenario TOML file
+.TP
+\fB\-c\fR, \fB\-\-contract\fR \fI<CONTRACT>\fR
+Path to the contract WASM file
+.TP
+\fB\-\-storage\fR \fI<STORAGE>\fR
+Initial storage state as JSON object
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

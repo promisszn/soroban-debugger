@@ -1,7 +1,10 @@
 use crate::debugger::instruction_pointer::StepMode;
 use crate::runtime::instruction::Instruction;
 use crossterm::style::Stylize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
+/// Verbosity level stored as u8: 0 = Quiet, 1 = Normal, 2 = Verbose
+static VERBOSITY_LEVEL: AtomicU8 = AtomicU8::new(1);
 
 /// Pretty printing utilities for debugger output
 pub struct Formatter;
@@ -178,6 +181,21 @@ impl Formatter {
     pub fn configure_colors_from_env() {
         let no_color = std::env::var_os("NO_COLOR").is_some();
         Self::configure_colors(!no_color);
+    }
+
+    /// Set the global verbosity level (0 = Quiet, 1 = Normal, 2 = Verbose).
+    pub fn set_verbosity(level: u8) {
+        VERBOSITY_LEVEL.store(level, Ordering::Relaxed);
+    }
+
+    /// Returns true when quiet mode is active (only errors and return values).
+    pub fn is_quiet() -> bool {
+        VERBOSITY_LEVEL.load(Ordering::Relaxed) == 0
+    }
+
+    /// Returns true when verbose mode is active (show all internal details).
+    pub fn is_verbose() -> bool {
+        VERBOSITY_LEVEL.load(Ordering::Relaxed) >= 2
     }
 
     fn apply_color(message: &str, kind: ColorKind) -> String {

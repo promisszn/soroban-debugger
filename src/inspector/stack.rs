@@ -50,7 +50,7 @@ impl CallStackInspector {
             return;
         }
 
-        println!("Call Stack:");
+        crate::logging::log_display("Call Stack:", crate::logging::LogLevel::Info);
         for (i, frame) in self.stack.iter().enumerate() {
             let indent = "  ".repeat(i);
             let contract_ctx = if let Some(ref id) = frame.contract_id {
@@ -66,14 +66,20 @@ impl CallStackInspector {
             };
 
             if i == self.stack.len() - 1 {
-                println!(
-                    "{}→ {}{}{}",
-                    indent, frame.function, contract_ctx, duration_ctx
+                crate::logging::log_display(
+                    format!(
+                        "{}→ {}{}{}",
+                        indent, frame.function, contract_ctx, duration_ctx
+                    ),
+                    crate::logging::LogLevel::Info,
                 );
             } else {
-                println!(
-                    "{}└─ {}{}{}",
-                    indent, frame.function, contract_ctx, duration_ctx
+                crate::logging::log_display(
+                    format!(
+                        "{}└─ {}{}{}",
+                        indent, frame.function, contract_ctx, duration_ctx
+                    ),
+                    crate::logging::LogLevel::Info,
                 );
             }
         }

@@ -72,20 +72,23 @@ impl ReplSession {
                         Ok(true) => break, // Exit requested
                         Ok(false) => {}    // Continue
                         Err(e) => {
-                            eprintln!("{}", Formatter::error(format!("Error: {}", e).as_str()));
+                            tracing::error!(
+                                "{}",
+                                Formatter::error(format!("Error: {}", e).as_str())
+                            );
                         }
                     }
                 }
                 Err(ReadlineError::Interrupted) => {
-                    println!("\n{}", Formatter::info("Use 'exit' or Ctrl+D to quit"));
+                    tracing::info!("\n{}", Formatter::info("Use 'exit' or Ctrl+D to quit"));
                 }
                 Err(ReadlineError::Eof) => {
                     // Ctrl+D
-                    println!("\n{}", Formatter::success("Goodbye!"));
+                    tracing::info!("\n{}", Formatter::success("Goodbye!"));
                     break;
                 }
                 Err(e) => {
-                    eprintln!("{}", Formatter::error(format!("Error: {}", e).as_str()));
+                    tracing::error!("{}", Formatter::error(format!("Error: {}", e).as_str()));
                 }
             }
         }
@@ -127,51 +130,51 @@ impl ReplSession {
     }
 
     fn print_welcome(&self) {
-        println!("{}", Formatter::success("=== Soroban Debug REPL ==="));
-        println!(
+        tracing::info!("{}", Formatter::success("=== Soroban Debug REPL ==="));
+        tracing::info!(
             "{}",
             Formatter::info(format!("Contract: {}", self.config.contract_path.display()).as_str())
         );
-        println!("{}", Formatter::info("Type 'help' for available commands"));
-        println!();
+        tracing::info!("{}", Formatter::info("Type 'help' for available commands"));
+        tracing::info!("");
     }
 
     fn print_help(&self) {
-        println!();
-        println!("{}", Formatter::success("Available Commands:"));
-        println!(
+        tracing::info!("");
+        tracing::info!("{}", Formatter::success("Available Commands:"));
+        tracing::info!(
             "  {} <func> [args...]  Call a contract function",
             Formatter::info("call")
         );
-        println!(
+        tracing::info!(
             "  {}                 Show contract storage state",
             Formatter::info("storage")
         );
-        println!(
+        tracing::info!(
             "  {}                 Show command history",
             Formatter::info("history")
         );
-        println!(
+        tracing::info!(
             "  {}                    Clear the screen",
             Formatter::info("clear")
         );
-        println!(
+        tracing::info!(
             "  {}                     Show this help message",
             Formatter::info("help")
         );
-        println!(
+        tracing::info!(
             "  {}                     Exit the REPL",
             Formatter::info("exit")
         );
-        println!();
+        tracing::info!("");
     }
 
     fn print_history(&self) {
-        println!();
-        println!("{}", Formatter::success("Command History:"));
+        tracing::info!("");
+        tracing::info!("{}", Formatter::success("Command History:"));
         for (idx, item) in self.editor.history().iter().enumerate() {
-            println!("  {}: {}", idx, item);
+            tracing::info!("  {}: {}", idx, item);
         }
-        println!();
+        tracing::info!("");
     }
 }

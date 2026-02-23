@@ -14,16 +14,18 @@ pub fn log_display<D: fmt::Display>(message: D, level: LogLevel) {
         LogLevel::Warn => tracing::warn!("{}", msg),
         LogLevel::Error => tracing::error!("{}", msg),
         LogLevel::Debug => tracing::debug!("{}", msg),
+        LogLevel::Trace => tracing::trace!("{}", msg),
     }
 }
 
 /// Log levels matching tracing crate levels.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
     Info,
     Warn,
     Error,
     Debug,
+    Trace,
 }
 
 /// Log contract loading event.

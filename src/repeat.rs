@@ -105,7 +105,74 @@ impl AggregateStats {
 
     /// Pretty-print the aggregate stats to stdout.
     pub fn display(&self) {
+        use crate::ui::formatter::Formatter;
         let n = self.runs.len();
+
+        if !Formatter::is_quiet() {
+            println!(
+                "\n{}",
+                Formatter::info(format!("--- Repeat Execution Summary ({} runs) ---", n))
+            );
+
+            println!("{}", Formatter::info("Duration:"));
+            println!(
+                "{}",
+                Formatter::info(format!(
+                    "  Min: {:.2} ms",
+                    self.min_duration.as_secs_f64() * 1000.0
+                ))
+            );
+            println!(
+                "{}",
+                Formatter::info(format!(
+                    "  Max: {:.2} ms",
+                    self.max_duration.as_secs_f64() * 1000.0
+                ))
+            );
+            println!(
+                "{}",
+                Formatter::info(format!(
+                    "  Avg: {:.2} ms",
+                    self.avg_duration.as_secs_f64() * 1000.0
+                ))
+            );
+
+            println!("{}", Formatter::info("CPU Instructions:"));
+            println!("{}", Formatter::info(format!("  Min: {}", self.min_cpu)));
+            println!("{}", Formatter::info(format!("  Max: {}", self.max_cpu)));
+            println!("{}", Formatter::info(format!("  Avg: {}", self.avg_cpu)));
+
+            println!("{}", Formatter::info("Memory (bytes):"));
+            println!("{}", Formatter::info(format!("  Min: {}", self.min_memory)));
+            println!("{}", Formatter::info(format!("  Max: {}", self.max_memory)));
+            println!("{}", Formatter::info(format!("  Avg: {}", self.avg_memory)));
+
+            if self.inconsistent_results {
+                println!(
+                    "\n{}",
+                    Formatter::warning("WARNING: Inconsistent results detected across runs!")
+                );
+                let first = &self.runs[0].result;
+                println!("{}", Formatter::warning(format!("  Run 1: {}", first)));
+                for run in &self.runs {
+                    if run.result != *first {
+                        println!(
+                            "{}",
+                            Formatter::warning(format!("  Run {}: {}", run.iteration, run.result))
+                        );
+                    }
+                }
+            } else {
+                println!(
+                    "\n{}",
+                    Formatter::success("All runs produced identical results. ✓")
+                );
+                println!(
+                    "{}",
+                    Formatter::success(format!("Result: {:?}", self.runs[0].result))
+                );
+            }
+        }
 
         // Log aggregate statistics with structured fields
         tracing::info!(

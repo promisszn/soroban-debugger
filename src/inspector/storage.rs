@@ -2,6 +2,8 @@ use crate::{DebuggerError, Result};
 use crossterm::style::{Color, Stylize};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use soroban_env_host::budget::AsBudget;
+use soroban_env_host::xdr::{LedgerEntryData, LedgerKey};
 use soroban_env_host::Host;
 use std::collections::HashMap;
 use std::fs;
@@ -272,16 +274,28 @@ impl StorageInspector {
     pub fn display_access_report(&self) {
         let report = self.analyze_access_patterns();
         if report.stats.is_empty() {
-            println!("No storage access patterns recorded.");
+            crate::logging::log_display(
+                "No storage access patterns recorded.",
+                crate::logging::LogLevel::Info,
+            );
             return;
         }
 
-        println!("\nStorage Access Pattern Report");
-        println!(
-            "{:<30} | {:<10} | {:<10} | {:<20}",
-            "Key", "Reads", "Writes", "Notes"
+        crate::logging::log_display(
+            "\nStorage Access Pattern Report",
+            crate::logging::LogLevel::Info,
         );
-        println!("{:-<30}-+-{:-<10}-+-{:-<10}-+-{:-<20}", "", "", "", "");
+        crate::logging::log_display(
+            format!(
+                "{:<30} | {:<10} | {:<10} | {:<20}",
+                "Key", "Reads", "Writes", "Notes"
+            ),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!("{:-<30}-+-{:-<10}-+-{:-<10}-+-{:-<20}", "", "", "", ""),
+            crate::logging::LogLevel::Info,
+        );
 
         let mut entries: Vec<_> = report.stats.into_iter().collect();
         // Sort primarily by highest reads, then highest writes, then alphabetically
@@ -315,38 +329,66 @@ impl StorageInspector {
                 key.clone()
             };
 
-            println!(
-                "{:<30} | {:<10} | {:<10} | {}",
-                key_display.with(Color::Cyan),
-                stat.reads.to_string().with(if stat.reads > 5 {
-                    Color::Red
-                } else {
-                    Color::White
-                }),
-                stat.writes.to_string().with(if stat.writes > stat.reads {
-                    Color::Yellow
-                } else {
-                    Color::White
-                }),
-                display_notes.with(Color::DarkGrey)
+            crate::logging::log_display(
+                format!(
+                    "{:<30} | {:<10} | {:<10} | {}",
+                    key_display.with(Color::Cyan),
+                    stat.reads.to_string().with(if stat.reads > 5 {
+                        Color::Red
+                    } else {
+                        Color::White
+                    }),
+                    stat.writes.to_string().with(if stat.writes > stat.reads {
+                        Color::Yellow
+                    } else {
+                        Color::White
+                    }),
+                    display_notes.with(Color::DarkGrey)
+                ),
+                crate::logging::LogLevel::Info,
             );
         }
-        println!();
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
     }
 
     /// Capture a snapshot of all storage entries from the host
-    pub fn capture_snapshot(_host: &Host) -> HashMap<String, String> {
-        // In a real implementation, we would iterate through host.get_ledger_entries()
-        // or track changes via a custom Storage instance.
-        // For this debugger, we'll try to extract what's available.
-        // Since Host doesn't easily expose all entries without XDR iteration,
-        // we'll use a placeholder logic that would be backed by actual storage tracking
-        // in a production environment.
+    pub fn capture_snapshot(host: &Host) -> HashMap<String, String> {
+        match host.with_mut_storage(|storage| {
+            let mut snapshot = HashMap::new();
 
-        // NOTE: In Soroban host, entries are typically accessed by key.
-        // To show "everything", we'd need to have tracked access during execution.
+            for (key, entry_opt) in storage.map.iter(host.as_budget())? {
+                let Some((entry, ttl)) = entry_opt.as_ref() else {
+                    continue;
+                };
 
-        HashMap::new()
+                let key_str = match key.as_ref() {
+                    LedgerKey::ContractData(cd) => {
+                        format!("contract_data:{:?}:{:?}", cd.durability, cd.key)
+                    }
+                    LedgerKey::ContractCode(_) => "contract_code".to_string(),
+                    other => format!("{:?}", other),
+                };
+
+                let mut value_str = match &entry.as_ref().data {
+                    LedgerEntryData::ContractData(cd) => format!("{:?}", cd.val),
+                    other => format!("{:?}", other),
+                };
+
+                if let Some(live_until) = ttl {
+                    value_str.push_str(&format!(" (ttl={})", live_until));
+                }
+
+                snapshot.insert(key_str, value_str);
+            }
+
+            Ok(snapshot)
+        }) {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                tracing::warn!("Failed to capture storage snapshot: {}", e);
+                HashMap::new()
+            }
+        }
     }
 
     /// Compute the difference between two storage snapshots
@@ -370,14 +412,14 @@ impl StorageInspector {
                 Some(val_before) => {
                     if val_before != val_after {
                         modified.insert(key.clone(), (val_before.clone(), val_after.clone()));
-                        if alert_filter.matches(key) {
+                        if !alerts.is_empty() && alert_filter.matches(key) {
                             triggered_alerts.push(key.clone());
                         }
                     }
                 }
                 None => {
                     added.insert(key.clone(), val_after.clone());
-                    if alert_filter.matches(key) {
+                    if !alerts.is_empty() && alert_filter.matches(key) {
                         triggered_alerts.push(key.clone());
                     }
                 }
@@ -387,7 +429,7 @@ impl StorageInspector {
         for key in before.keys() {
             if !after.contains_key(key) {
                 deleted.push(key.clone());
-                if alert_filter.matches(key) {
+                if !alerts.is_empty() && alert_filter.matches(key) {
                     triggered_alerts.push(key.clone());
                 }
             }
@@ -404,21 +446,24 @@ impl StorageInspector {
     /// Display a color-coded storage diff
     pub fn display_diff(diff: &StorageDiff) {
         if diff.is_empty() {
-            println!("Storage: (no changes)");
+            crate::logging::log_display("Storage: (no changes)", crate::logging::LogLevel::Info);
             return;
         }
 
-        println!("Storage Changes:");
+        crate::logging::log_display("Storage Changes:", crate::logging::LogLevel::Info);
 
         // Sort keys for deterministic output
         let mut added_keys: Vec<_> = diff.added.keys().collect();
         added_keys.sort();
         for key in added_keys {
-            println!(
-                "  {} {} = {}",
-                "+".with(Color::Green),
-                key,
-                diff.added[key].clone().with(Color::Green)
+            crate::logging::log_display(
+                format!(
+                    "  {} {} = {}",
+                    "+".with(Color::Green),
+                    key,
+                    diff.added[key].clone().with(Color::Green)
+                ),
+                crate::logging::LogLevel::Info,
             );
         }
 
@@ -426,30 +471,42 @@ impl StorageInspector {
         modified_keys.sort();
         for key in modified_keys {
             let (old, new) = &diff.modified[key];
-            println!(
-                "  {} {}: {} -> {}",
-                "~".with(Color::Yellow),
-                key,
-                old.clone().with(Color::Red),
-                new.clone().with(Color::Green)
+            crate::logging::log_display(
+                format!(
+                    "  {} {}: {} -> {}",
+                    "~".with(Color::Yellow),
+                    key,
+                    old.clone().with(Color::Red),
+                    new.clone().with(Color::Green)
+                ),
+                crate::logging::LogLevel::Info,
             );
         }
 
         let mut deleted_keys = diff.deleted.clone();
         deleted_keys.sort();
         for key in deleted_keys {
-            println!("  {} {}", "-".with(Color::Red), key.with(Color::Red));
+            crate::logging::log_display(
+                format!("  {} {}", "-".with(Color::Red), key.with(Color::Red)),
+                crate::logging::LogLevel::Info,
+            );
         }
 
         if !diff.triggered_alerts.is_empty() {
-            println!(
-                "\n{}",
-                "!!! CRITICAL STORAGE ALERT !!!".with(Color::Red).bold()
+            crate::logging::log_display(
+                format!(
+                    "\n{}",
+                    "!!! CRITICAL STORAGE ALERT !!!".with(Color::Red).bold()
+                ),
+                crate::logging::LogLevel::Error,
             );
             let mut alerts = diff.triggered_alerts.clone();
             alerts.sort();
             for key in alerts {
-                println!("  {} was modified!", key.with(Color::Red).bold());
+                crate::logging::log_display(
+                    format!("  {} was modified!", key.with(Color::Red).bold()),
+                    crate::logging::LogLevel::Error,
+                );
             }
         }
     }

@@ -54,15 +54,21 @@ impl BudgetInspector {
                 Severity::Critical => "[CRITICAL]",
             };
 
-            println!(
-                "  {} {} usage at {:.1}%",
-                prefix.with(color),
-                warning.resource,
-                warning.percentage
+            crate::logging::log_display(
+                format!(
+                    "  {} {} usage at {:.1}%",
+                    prefix.with(color),
+                    warning.resource,
+                    warning.percentage
+                ),
+                crate::logging::LogLevel::Warn,
             );
 
             if let Some(suggestion) = warning.suggestion {
-                println!("    Suggestion: {}", suggestion.italic());
+                crate::logging::log_display(
+                    format!("    Suggestion: {}", suggestion.italic()),
+                    crate::logging::LogLevel::Warn,
+                );
             }
         }
     }
@@ -392,27 +398,54 @@ pub struct MemorySummary {
 
 impl MemorySummary {
     pub fn display(&self) {
-        println!("\n=== Memory Allocation Summary ===");
-        println!("Peak Memory Usage: {} bytes", self.peak_memory);
-        println!("Allocation Count: {}", self.allocation_count);
-        println!(
-            "Total Allocated Bytes: {} bytes",
-            self.total_allocated_bytes
+        crate::logging::log_display(
+            "\n=== Memory Allocation Summary ===",
+            crate::logging::LogLevel::Info,
         );
-        println!("Initial Memory: {} bytes", self.initial_memory);
-        println!("Final Memory: {} bytes", self.final_memory);
-        println!(
-            "Memory Delta: {} bytes",
-            self.final_memory.saturating_sub(self.initial_memory)
+        crate::logging::log_display(
+            format!("Peak Memory Usage: {} bytes", self.peak_memory),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!("Allocation Count: {}", self.allocation_count),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!(
+                "Total Allocated Bytes: {} bytes",
+                self.total_allocated_bytes
+            ),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!("Initial Memory: {} bytes", self.initial_memory),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!("Final Memory: {} bytes", self.final_memory),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!(
+                "Memory Delta: {} bytes",
+                self.final_memory.saturating_sub(self.initial_memory)
+            ),
+            crate::logging::LogLevel::Info,
         );
 
         if !self.top_allocations.is_empty() {
-            println!("\nTop 5 Largest Allocations:");
+            crate::logging::log_display(
+                "\nTop 5 Largest Allocations:",
+                crate::logging::LogLevel::Info,
+            );
             for (idx, alloc) in self.top_allocations.iter().enumerate() {
-                println!("  {}. {} bytes at {}", idx + 1, alloc.size, alloc.location);
+                crate::logging::log_display(
+                    format!("  {}. {} bytes at {}", idx + 1, alloc.size, alloc.location),
+                    crate::logging::LogLevel::Info,
+                );
             }
         }
-        println!();
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
     }
 
     pub fn to_json(&self) -> serde_json::Result<String> {

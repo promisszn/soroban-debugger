@@ -1,6 +1,7 @@
 use crate::cli::args::{
-    AnalyzeArgs, CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RemoteArgs,
-    ReplArgs, ReplayArgs, RunArgs, ServerArgs, SymbolicArgs, TuiArgs, UpgradeCheckArgs, Verbosity,
+    AnalyzeArgs, CompareArgs, GraphFormat, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs,
+    RemoteArgs, ReplArgs, ReplayArgs, RunArgs, ScenarioArgs, ServerArgs, SymbolicArgs, TuiArgs,
+    UpgradeCheckArgs, Verbosity,
 };
 use crate::debugger::engine::DebuggerEngine;
 use crate::debugger::instruction_pointer::StepMode;
@@ -18,15 +19,33 @@ use std::fs;
 use textplots::{Chart, Plot, Shape};
 
 fn print_info(message: impl AsRef<str>) {
-    println!("{}", Formatter::info(message));
+    if !Formatter::is_quiet() {
+        println!("{}", Formatter::info(message));
+    }
 }
 
 fn print_success(message: impl AsRef<str>) {
-    println!("{}", Formatter::success(message));
+    if !Formatter::is_quiet() {
+        println!("{}", Formatter::success(message));
+    }
 }
 
 fn print_warning(message: impl AsRef<str>) {
-    println!("{}", Formatter::warning(message));
+    if !Formatter::is_quiet() {
+        println!("{}", Formatter::warning(message));
+    }
+}
+
+/// Print the final contract return value — always shown regardless of verbosity.
+fn print_result(message: impl AsRef<str>) {
+    println!("{}", Formatter::success(message));
+}
+
+/// Print verbose-only detail — only shown when --verbose is active.
+fn print_verbose(message: impl AsRef<str>) {
+    if Formatter::is_verbose() {
+        println!("{}", Formatter::info(message));
+    }
 }
 
 /// Execute batch mode with parallel execution
@@ -83,11 +102,11 @@ fn run_batch(args: &RunArgs, batch_file: &std::path::Path) -> Result<()> {
             "results": results,
             "summary": summary,
         });
-        println!(
-            "\n{}",
-            serde_json::to_string_pretty(&output).map_err(|e| DebuggerError::FileError(
-                format!("Failed to serialize output: {}", e)
-            ))?
+        logging::log_display(
+            serde_json::to_string_pretty(&output).map_err(|e| {
+                DebuggerError::FileError(format!("Failed to serialize output: {}", e))
+            })?,
+            logging::LogLevel::Info,
         );
     }
 
@@ -105,6 +124,7 @@ fn run_batch(args: &RunArgs, batch_file: &std::path::Path) -> Result<()> {
 }
 
 /// Execute the run command.
+#[tracing::instrument(skip_all, fields(contract = ?args.contract, function = args.function))]
 pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     // Handle batch execution mode
     if let Some(batch_file) = &args.batch_args {
@@ -139,9 +159,9 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     ));
 
     if args.verbose || verbosity == Verbosity::Verbose {
-        print_info(format!("SHA-256: {}", wasm_hash));
+        print_verbose(format!("SHA-256: {}", wasm_hash));
         if args.expected_hash.is_some() {
-            print_success("Checksum verified ✓");
+            print_verbose("Checksum verified ✓");
         }
     }
 
@@ -225,7 +245,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     let result = engine.execute(&args.function, parsed_args.as_deref())?;
     let storage_after = engine.executor().get_storage_snapshot()?;
     print_success("\n--- Execution Complete ---\n");
-    print_success(format!("Result: {:?}", result));
+    print_result(format!("Result: {:?}", result));
     logging::log_execution_complete(&result);
 
     // Generate test if requested
@@ -331,11 +351,13 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     if args.show_auth {
         let auth_tree = engine.executor().get_auth_tree()?;
         if args.json {
+            // JSON mode: print the auth tree inline (will also be included in
+            // the combined JSON object further below).
             let json_output = crate::inspector::auth::AuthInspector::to_json(&auth_tree)?;
-            println!("{}", json_output);
+            logging::log_display(json_output, logging::LogLevel::Info);
         } else {
-            println!("\n--- Authorizations ---");
-            crate::inspector::auth::AuthInspector::display(&auth_tree);
+            print_info("\n--- Authorization Tree ---");
+            crate::inspector::auth::AuthInspector::display_with_summary(&auth_tree);
         }
         json_auth = Some(auth_tree);
     }
@@ -346,35 +368,48 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
         let mut ledger_inspector = crate::inspector::ledger::LedgerEntryInspector::new();
         ledger_inspector.set_ttl_warning_threshold(args.ttl_warning_threshold);
 
-        // Extract ledger entries from storage snapshots
-        // Instance entries (from the after-snapshot, representing accessed state)
-        for (key, value) in &storage_after {
-            let storage_type = if key.starts_with("instance:") || key.starts_with("Instance") {
-                crate::inspector::ledger::StorageType::Instance
-            } else if key.starts_with("temp:") || key.starts_with("Temporary") {
-                crate::inspector::ledger::StorageType::Temporary
-            } else {
-                crate::inspector::ledger::StorageType::Persistent
-            };
+        match engine.executor_mut().finish() {
+            Ok((footprint, storage)) => {
+                let mut footprint_map = std::collections::HashMap::new();
+                for (k, v) in &footprint.0 {
+                    footprint_map.insert(k.clone(), *v);
+                }
 
-            let was_read = storage_before.contains_key(key);
-            let was_written = storage_after.get(key) != storage_before.get(key);
+                for (key, val_opt) in &storage.map {
+                    if let Some(access_type) = footprint_map.get(key) {
+                        if let Some((entry, ttl)) = val_opt {
+                            let key_str = format!("{:?}", **key);
+                            let storage_type =
+                                if key_str.contains("Temporary") || key_str.contains("temporary") {
+                                    crate::inspector::ledger::StorageType::Temporary
+                                } else if key_str.contains("Instance")
+                                    || key_str.contains("instance")
+                                    || key_str.contains("LedgerKeyContractInstance")
+                                {
+                                    crate::inspector::ledger::StorageType::Instance
+                                } else {
+                                    crate::inspector::ledger::StorageType::Persistent
+                                };
 
-            // Simulated TTL based on storage type defaults
-            let ttl = match storage_type {
-                crate::inspector::ledger::StorageType::Instance => 999_999,
-                crate::inspector::ledger::StorageType::Persistent => 120_960,
-                crate::inspector::ledger::StorageType::Temporary => 17_280,
-            };
+                            use soroban_env_host::storage::AccessType;
+                            let is_read = true; // Everything in the footprint is at least read
+                            let is_write = matches!(*access_type, AccessType::ReadWrite);
 
-            ledger_inspector.add_entry(
-                key.clone(),
-                value.clone(),
-                storage_type,
-                ttl,
-                was_read || !was_written,
-                was_written,
-            );
+                            ledger_inspector.add_entry(
+                                format!("{:?}", **key),
+                                format!("{:?}", **entry),
+                                storage_type,
+                                ttl.unwrap_or(0),
+                                is_read,
+                                is_write,
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                print_warning(format!("Failed to extract ledger footprint: {}", e));
+            }
         }
 
         ledger_inspector.display();
@@ -410,7 +445,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
             );
         }
         if let Some(auth_tree) = json_auth {
-            output["auth"] = serde_json::to_value(auth_tree).unwrap_or(serde_json::Value::Null);
+            output["auth"] = crate::inspector::auth::AuthInspector::to_json_value(&auth_tree);
         }
         if !mock_calls.is_empty() {
             output["mock_calls"] = serde_json::Value::Array(
@@ -432,11 +467,11 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
             output["ledger_entries"] = ledger.to_json();
         }
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&output).map_err(|e| DebuggerError::FileError(
-                format!("Failed to serialize output: {}", e)
-            ))?
+        logging::log_display(
+            serde_json::to_string_pretty(&output).map_err(|e| {
+                DebuggerError::FileError(format!("Failed to serialize output: {}", e))
+            })?,
+            logging::LogLevel::Info,
         );
     }
 
@@ -468,9 +503,9 @@ fn run_dry_run(args: &RunArgs) -> Result<()> {
     ));
 
     if args.verbose {
-        print_info(format!("[DRY RUN] SHA-256: {}", wasm_hash));
+        print_verbose(format!("[DRY RUN] SHA-256: {}", wasm_hash));
         if args.expected_hash.is_some() {
-            print_success("[DRY RUN] Checksum verified ✓");
+            print_verbose("[DRY RUN] Checksum verified ✓");
         }
     }
 
@@ -504,16 +539,28 @@ fn run_dry_run(args: &RunArgs) -> Result<()> {
         executor.set_mock_specs(&args.mock)?;
     }
 
-    let storage_snapshot = executor.snapshot_storage()?;
+    let dry_run_snapshot = executor.snapshot_storage()?;
+    let storage_before = executor.get_storage_snapshot()?;
 
     let mut engine = DebuggerEngine::new(executor, args.breakpoint.clone());
 
     print_info("\n[DRY RUN] --- Execution Start ---\n");
     let result = engine.execute(&args.function, parsed_args.as_deref())?;
     print_success("\n[DRY RUN] --- Execution Complete ---\n");
-    print_success(format!("[DRY RUN] Result: {:?}", result));
+    print_result(format!("[DRY RUN] Result: {:?}", result));
     if !args.mock.is_empty() {
-        display_mock_call_log(&engine.executor().get_mock_call_log());
+        let mock_calls = engine.executor().get_mock_call_log();
+        println!("\n[DRY RUN] --- Mock Calls ---");
+        for entry in mock_calls {
+            println!(
+                "[DRY RUN]  {} {}.{} (mocked: {}) -> {}",
+                if entry.mocked { "✓" } else { "✗" },
+                entry.contract_id,
+                entry.function,
+                entry.mocked,
+                entry.returned.as_deref().unwrap_or("<none>")
+            );
+        }
     }
 
     if args.show_events {
@@ -540,13 +587,33 @@ fn run_dry_run(args: &RunArgs) -> Result<()> {
         }
     }
 
-    engine.executor_mut().restore_storage(&storage_snapshot)?;
+    let storage_after = engine.executor().get_storage_snapshot()?;
+    let diff = crate::inspector::StorageInspector::compute_diff(
+        &storage_before,
+        &storage_after,
+        &args.alert_on_change,
+    );
+    if !diff.is_empty() {
+        println!("\n[DRY RUN] --- Storage Changes ---");
+        for (key, val) in &diff.added {
+            println!("[DRY RUN]  + {} = {}", key, val);
+        }
+        for (key, (old, new)) in &diff.modified {
+            println!("[DRY RUN]  ~ {}: {} -> {}", key, old, new);
+        }
+        for key in &diff.deleted {
+            println!("[DRY RUN]  - {}", key);
+        }
+    }
+
+    engine.executor_mut().restore_storage(&dry_run_snapshot)?;
     print_success("\n[DRY RUN] Storage state restored (changes rolled back)");
 
     Ok(())
 }
 
 /// Execute the interactive command.
+#[tracing::instrument(skip_all, fields(contract = ?args.contract))]
 pub fn interactive(args: InteractiveArgs, _verbosity: Verbosity) -> Result<()> {
     print_info(format!(
         "Starting interactive debugger for: {:?}",
@@ -575,9 +642,9 @@ pub fn interactive(args: InteractiveArgs, _verbosity: Verbosity) -> Result<()> {
     ));
 
     if _verbosity == Verbosity::Verbose {
-        print_info(format!("SHA-256: {}", wasm_hash));
+        print_verbose(format!("SHA-256: {}", wasm_hash));
         if args.expected_hash.is_some() {
-            print_success("Checksum verified ✓");
+            print_verbose("Checksum verified ✓");
         }
     }
 
@@ -646,6 +713,7 @@ pub fn tui(args: TuiArgs, _verbosity: Verbosity) -> Result<()> {
 }
 
 /// Execute the inspect command.
+#[tracing::instrument(skip_all, fields(contract = ?args.contract))]
 pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
     print_info(format!("Inspecting contract: {:?}", args.contract));
     logging::log_loading_contract(&args.contract.to_string_lossy());
@@ -666,50 +734,77 @@ pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
     }
 
     if _verbosity == Verbosity::Verbose {
-        print_info(format!("SHA-256: {}", wasm_hash));
+        print_verbose(format!("SHA-256: {}", wasm_hash));
         if args.expected_hash.is_some() {
-            print_success("Checksum verified ✓");
+            print_verbose("Checksum verified ✓");
         }
     }
 
     let module_info = crate::utils::wasm::get_module_info(&wasm_bytes)?;
 
-    println!("\n{}", "=".repeat(54));
-    println!("  Soroban Contract Inspector");
-    println!("{}", "=".repeat(54));
-    println!("\n  File : {:?}", args.contract);
-    println!("  Size : {} bytes", wasm_bytes.len());
+    logging::log_display(format!("\n{}", "=".repeat(54)), logging::LogLevel::Info);
+    logging::log_display("  Soroban Contract Inspector", logging::LogLevel::Info);
+    logging::log_display("=".repeat(54), logging::LogLevel::Info);
+    logging::log_display(
+        format!("\n  File : {:?}", args.contract),
+        logging::LogLevel::Info,
+    );
+    logging::log_display(
+        format!("  Size : {} bytes", wasm_bytes.len()),
+        logging::LogLevel::Info,
+    );
 
-    println!("\n{}", "-".repeat(54));
-    println!("  Module Information");
-    println!("{}", "-".repeat(54));
-    println!("  Types      : {}", module_info.type_count);
-    println!("  Functions  : {}", module_info.function_count);
-    println!("  Exports    : {}", module_info.export_count);
+    logging::log_display(format!("\n{}", "-".repeat(54)), logging::LogLevel::Info);
+    logging::log_display("  Module Information", logging::LogLevel::Info);
+    logging::log_display("-".repeat(54), logging::LogLevel::Info);
+    logging::log_display(
+        format!("  Types      : {}", module_info.type_count),
+        logging::LogLevel::Info,
+    );
+    logging::log_display(
+        format!("  Functions  : {}", module_info.function_count),
+        logging::LogLevel::Info,
+    );
+    logging::log_display(
+        format!("  Exports    : {}", module_info.export_count),
+        logging::LogLevel::Info,
+    );
 
     if args.functions {
-        println!("\n{}", "-".repeat(54));
-        println!("  Exported Functions");
-        println!("{}", "-".repeat(54));
+        logging::log_display(format!("\n{}", "-".repeat(54)), logging::LogLevel::Info);
+        logging::log_display("  Exported Functions", logging::LogLevel::Info);
+        logging::log_display("-".repeat(54), logging::LogLevel::Info);
 
         let functions = crate::utils::wasm::parse_functions(&wasm_bytes)?;
         if functions.is_empty() {
-            println!("  (No exported functions found)");
+            logging::log_display("  (No exported functions found)", logging::LogLevel::Info);
         } else {
             for function in functions {
-                println!("  {} {}", OutputConfig::to_ascii("•"), function);
+                logging::log_display(
+                    format!("  {} {}", OutputConfig::to_ascii("•"), function),
+                    logging::LogLevel::Info,
+                );
             }
         }
     }
 
-    if args.dependency_graph {
-        println!("\n{}", OutputConfig::rule_line(54));
-        println!("  Contract Dependency Graph");
-        println!("  {}", OutputConfig::rule_line(52));
+    if let Some(format) = args.dependency_graph {
+        logging::log_display(
+            format!("\n{}", OutputConfig::rule_line(54)),
+            logging::LogLevel::Info,
+        );
+        logging::log_display("  Contract Dependency Graph", logging::LogLevel::Info);
+        logging::log_display(
+            format!("  {}", OutputConfig::rule_line(52)),
+            logging::LogLevel::Info,
+        );
 
         let calls = crate::utils::wasm::parse_cross_contract_calls(&wasm_bytes)?;
         if calls.is_empty() {
-            println!("  (No cross-contract call instructions detected)");
+            logging::log_display(
+                "  (No cross-contract call instructions detected)",
+                logging::LogLevel::Info,
+            );
         } else {
             let contract_name = args
                 .contract
@@ -724,48 +819,73 @@ pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
                 graph.add_edge(contract_name.clone(), call.target);
             }
 
-            println!("\nDOT:");
-            println!("{}", graph.to_dot());
-            println!("\nMermaid:");
-            println!("{}", graph.to_mermaid());
+            match format {
+                GraphFormat::Dot => {
+                    logging::log_display("\nDOT:", logging::LogLevel::Info);
+                    logging::log_display(graph.to_dot(), logging::LogLevel::Info);
+                }
+                GraphFormat::Mermaid => {
+                    logging::log_display("\nMermaid:", logging::LogLevel::Info);
+                    logging::log_display(graph.to_mermaid(), logging::LogLevel::Info);
+                }
+            }
         }
     }
 
     if args.metadata {
-        println!("\n{}", "-".repeat(54));
-        println!("  Contract Metadata");
-        println!("{}", "-".repeat(54));
+        logging::log_display(format!("\n{}", "-".repeat(54)), logging::LogLevel::Info);
+        logging::log_display("  Contract Metadata", logging::LogLevel::Info);
+        logging::log_display("-".repeat(54), logging::LogLevel::Info);
 
         let metadata = crate::utils::wasm::extract_contract_metadata(&wasm_bytes)?;
         if metadata.is_empty() {
-            println!("  (No embedded metadata found)");
+            logging::log_display("  (No embedded metadata found)", logging::LogLevel::Info);
         } else {
             if let Some(version) = metadata.contract_version {
-                println!("  Contract version      : {}", version);
+                logging::log_display(
+                    format!("  Contract version      : {}", version),
+                    logging::LogLevel::Info,
+                );
             }
             if let Some(sdk) = metadata.sdk_version {
-                println!("  Soroban SDK version   : {}", sdk);
+                logging::log_display(
+                    format!("  Soroban SDK version   : {}", sdk),
+                    logging::LogLevel::Info,
+                );
             }
             if let Some(build_date) = metadata.build_date {
-                println!("  Build date            : {}", build_date);
+                logging::log_display(
+                    format!("  Build date            : {}", build_date),
+                    logging::LogLevel::Info,
+                );
             }
             if let Some(author) = metadata.author {
-                println!("  Author / organization : {}", author);
+                logging::log_display(
+                    format!("  Author / organization : {}", author),
+                    logging::LogLevel::Info,
+                );
             }
             if let Some(desc) = metadata.description {
-                println!("  Description           : {}", desc);
+                logging::log_display(
+                    format!("  Description           : {}", desc),
+                    logging::LogLevel::Info,
+                );
             }
             if let Some(impl_notes) = metadata.implementation {
-                println!("  Implementation notes  : {}", impl_notes);
+                logging::log_display(
+                    format!("  Implementation notes  : {}", impl_notes),
+                    logging::LogLevel::Info,
+                );
             }
         }
     }
 
-    println!("\n{}", "=".repeat(54));
+    logging::log_display(format!("\n{}", "=".repeat(54)), logging::LogLevel::Info);
     Ok(())
 }
 
 /// Execute the analyze command.
+#[tracing::instrument(skip_all, fields(contract = ?args.contract, function = ?args.function))]
 pub fn analyze(args: AnalyzeArgs, _verbosity: Verbosity) -> Result<()> {
     print_info(format!("Analyzing contract: {:?}", args.contract));
     logging::log_loading_contract(&args.contract.to_string_lossy());
@@ -814,30 +934,45 @@ pub fn analyze(args: AnalyzeArgs, _verbosity: Verbosity) -> Result<()> {
     let report = analyzer.analyze(&wasm_bytes, executor.as_ref(), trace.as_deref())?;
 
     if args.format.eq_ignore_ascii_case("json") {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report).map_err(|e| DebuggerError::FileError(
-                format!("Failed to serialize report: {}", e)
-            ))?
+        logging::log_display(
+            serde_json::to_string_pretty(&report).map_err(|e| {
+                DebuggerError::FileError(format!("Failed to serialize report: {}", e))
+            })?,
+            logging::LogLevel::Info,
         );
     } else {
-        println!("\n{}", "=".repeat(54));
-        println!("  Soroban Security Vulnerability Report");
-        println!("{}", "=".repeat(54));
+        logging::log_display(format!("\n{}", "=".repeat(54)), logging::LogLevel::Info);
+        logging::log_display(
+            "  Soroban Security Vulnerability Report",
+            logging::LogLevel::Info,
+        );
+        logging::log_display("=".repeat(54), logging::LogLevel::Info);
 
         if report.findings.is_empty() {
-            println!("\n  ✅ No vulnerabilities detected.");
+            logging::log_display(
+                "\n  ✅ No vulnerabilities detected.",
+                logging::LogLevel::Info,
+            );
         } else {
             for finding in &report.findings {
-                println!(
-                    "\n  [{:?}] {} - {}",
-                    finding.severity, finding.rule_id, finding.location
+                logging::log_display(
+                    format!(
+                        "\n  [{:?}] {} - {}",
+                        finding.severity, finding.rule_id, finding.location
+                    ),
+                    logging::LogLevel::Info,
                 );
-                println!("  Description : {}", finding.description);
-                println!("  Remediation : {}", finding.remediation);
+                logging::log_display(
+                    format!("  Description : {}", finding.description),
+                    logging::LogLevel::Info,
+                );
+                logging::log_display(
+                    format!("  Remediation : {}", finding.remediation),
+                    logging::LogLevel::Info,
+                );
             }
         }
-        println!("\n{}", "=".repeat(54));
+        logging::log_display(format!("\n{}", "=".repeat(54)), logging::LogLevel::Info);
     }
 
     Ok(())
@@ -907,9 +1042,9 @@ pub fn optimize(args: OptimizeArgs, _verbosity: Verbosity) -> Result<()> {
     ));
 
     if _verbosity == Verbosity::Verbose {
-        print_info(format!("SHA-256: {}", wasm_hash));
+        print_verbose(format!("SHA-256: {}", wasm_hash));
         if args.expected_hash.is_some() {
-            print_success("Checksum verified ✓");
+            print_verbose("Checksum verified ✓");
         }
     }
 
@@ -948,9 +1083,12 @@ pub fn optimize(args: OptimizeArgs, _verbosity: Verbosity) -> Result<()> {
         print_info(format!("  Analyzing function: {}", function_name));
         match optimizer.analyze_function(function_name, args.args.as_deref()) {
             Ok(profile) => {
-                println!(
-                    "    CPU: {} instructions, Memory: {} bytes, Time: {} ms",
-                    profile.total_cpu, profile.total_memory, profile.wall_time_ms
+                logging::log_display(
+                    format!(
+                        "    CPU: {} instructions, Memory: {} bytes, Time: {} ms",
+                        profile.total_cpu, profile.total_memory, profile.wall_time_ms
+                    ),
+                    logging::LogLevel::Info,
                 );
                 print_success(format!(
                     "    CPU: {} instructions, Memory: {} bytes",
@@ -993,7 +1131,10 @@ pub fn optimize(args: OptimizeArgs, _verbosity: Verbosity) -> Result<()> {
 
 /// ✅ Execute the profile command (hotspots + suggestions)
 pub fn profile(args: ProfileArgs) -> Result<()> {
-    println!("Profiling contract execution: {:?}", args.contract);
+    logging::log_display(
+        format!("Profiling contract execution: {:?}", args.contract),
+        logging::LogLevel::Info,
+    );
 
     let wasm_file = crate::utils::wasm::load_wasm(&args.contract)
         .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
@@ -1010,7 +1151,10 @@ pub fn profile(args: ProfileArgs) -> Result<()> {
         }
     }
 
-    println!("Contract loaded successfully ({} bytes)", wasm_bytes.len());
+    logging::log_display(
+        format!("Contract loaded successfully ({} bytes)", wasm_bytes.len()),
+        logging::LogLevel::Info,
+    );
 
     // Parse args (optional)
     let parsed_args = if let Some(args_json) = &args.args {
@@ -1031,9 +1175,12 @@ pub fn profile(args: ProfileArgs) -> Result<()> {
     // Analyze exactly one function (this command focuses on execution hotspots)
     let mut optimizer = crate::profiler::analyzer::GasOptimizer::new(executor);
 
-    println!("\nRunning function: {}", args.function);
+    logging::log_display(
+        format!("\nRunning function: {}", args.function),
+        logging::LogLevel::Info,
+    );
     if let Some(ref a) = parsed_args {
-        println!("Args: {}", a);
+        logging::log_display(format!("Args: {}", a), logging::LogLevel::Info);
     }
 
     let _profile = optimizer.analyze_function(&args.function, parsed_args.as_deref())?;
@@ -1042,7 +1189,10 @@ pub fn profile(args: ProfileArgs) -> Result<()> {
     let report = optimizer.generate_report(&contract_path_str);
 
     // Hotspot summary first
-    println!("\n{}", report.format_hotspots());
+    logging::log_display(
+        format!("\n{}", report.format_hotspots()),
+        logging::LogLevel::Info,
+    );
 
     // Then detailed suggestions (markdown format)
     let markdown = optimizer.generate_markdown_report(&report);
@@ -1054,9 +1204,12 @@ pub fn profile(args: ProfileArgs) -> Result<()> {
                 output_path, e
             ))
         })?;
-        println!("\nProfile report written to: {:?}", output_path);
+        logging::log_display(
+            format!("\nProfile report written to: {:?}", output_path),
+            logging::LogLevel::Info,
+        );
     } else {
-        println!("\n{}", markdown);
+        logging::log_display(format!("\n{}", markdown), logging::LogLevel::Info);
     }
 
     Ok(())
@@ -1147,7 +1300,7 @@ pub fn compare(args: CompareArgs) -> Result<()> {
         })?;
         print_success(format!("Comparison report written to: {:?}", output_path));
     } else {
-        println!("{}", rendered);
+        logging::log_display(rendered, logging::LogLevel::Info);
     }
 
     Ok(())
@@ -1363,17 +1516,17 @@ pub fn replay(args: ReplayArgs, verbosity: Verbosity) -> Result<()> {
     }
 
     if verbosity == Verbosity::Verbose {
-        print_info("\n--- Call Sequence (Original) ---");
+        print_verbose("\n--- Call Sequence (Original) ---");
         for (i, call) in original_trace.call_sequence.iter().enumerate() {
             let indent = "  ".repeat(call.depth as usize);
             if let Some(args) = &call.args {
-                print_info(format!("{}{}. {} ({})", indent, i, call.function, args));
+                print_verbose(format!("{}{}. {} ({})", indent, i, call.function, args));
             } else {
-                print_info(format!("{}{}. {}", indent, i, call.function));
+                print_verbose(format!("{}{}. {}", indent, i, call.function));
             }
 
             if is_partial_replay && i >= replay_steps {
-                print_warning(format!("{}... (stopped at step {})", indent, replay_steps));
+                print_verbose(format!("{}... (stopped at step {})", indent, replay_steps));
                 break;
             }
         }
@@ -1408,7 +1561,7 @@ pub fn symbolic(args: SymbolicArgs, _verbosity: Verbosity) -> Result<()> {
         })?;
         print_success(format!("Wrote scenario to {:?}", out));
     } else {
-        println!("{}", toml);
+        logging::log_display(toml, logging::LogLevel::Info);
     }
 
     Ok(())
@@ -1420,8 +1573,14 @@ fn run_instruction_stepping(
     function: &str,
     args: Option<&str>,
 ) -> Result<()> {
-    println!("\n=== Instruction Stepping Mode ===");
-    println!("Type 'help' for available commands\n");
+    logging::log_display(
+        "\n=== Instruction Stepping Mode ===",
+        logging::LogLevel::Info,
+    );
+    logging::log_display(
+        "Type 'help' for available commands\n",
+        logging::LogLevel::Info,
+    );
 
     display_instruction_context(engine, 3);
 
@@ -1439,51 +1598,80 @@ fn run_instruction_stepping(
         match input.as_str() {
             "n" | "next" | "s" | "step" | "into" | "" => match engine.step_into() {
                 Ok(true) => {
-                    println!("Stepped to next instruction");
+                    logging::log_display("Stepped to next instruction", logging::LogLevel::Info);
                     display_instruction_context(engine, 3);
                 }
-                Ok(false) => println!("Cannot step: execution finished or error occurred"),
-                Err(e) => println!("Error stepping: {}", e),
+                Ok(false) => logging::log_display(
+                    "Cannot step: execution finished or error occurred",
+                    logging::LogLevel::Info,
+                ),
+                Err(e) => {
+                    logging::log_display(format!("Error stepping: {}", e), logging::LogLevel::Info)
+                }
             },
             "o" | "over" => match engine.step_over() {
                 Ok(true) => {
-                    println!("Stepped over instruction");
+                    logging::log_display("Stepped over instruction", logging::LogLevel::Info);
                     display_instruction_context(engine, 3);
                 }
-                Ok(false) => println!("Cannot step over: execution finished or error occurred"),
-                Err(e) => println!("Error stepping: {}", e),
+                Ok(false) => logging::log_display(
+                    "Cannot step over: execution finished or error occurred",
+                    logging::LogLevel::Info,
+                ),
+                Err(e) => {
+                    logging::log_display(format!("Error stepping: {}", e), logging::LogLevel::Info)
+                }
             },
             "u" | "out" => match engine.step_out() {
                 Ok(true) => {
-                    println!("Stepped out of function");
+                    logging::log_display("Stepped out of function", logging::LogLevel::Info);
                     display_instruction_context(engine, 3);
                 }
-                Ok(false) => println!("Cannot step out: execution finished or error occurred"),
-                Err(e) => println!("Error stepping: {}", e),
+                Ok(false) => logging::log_display(
+                    "Cannot step out: execution finished or error occurred",
+                    logging::LogLevel::Info,
+                ),
+                Err(e) => {
+                    logging::log_display(format!("Error stepping: {}", e), logging::LogLevel::Info)
+                }
             },
             "b" | "block" => match engine.step_block() {
                 Ok(true) => {
-                    println!("Stepped to next basic block");
+                    logging::log_display("Stepped to next basic block", logging::LogLevel::Info);
                     display_instruction_context(engine, 3);
                 }
-                Ok(false) => {
-                    println!("Cannot step to next block: execution finished or error occurred")
+                Ok(false) => logging::log_display(
+                    "Cannot step to next block: execution finished or error occurred",
+                    logging::LogLevel::Info,
+                ),
+                Err(e) => {
+                    logging::log_display(format!("Error stepping: {}", e), logging::LogLevel::Info)
                 }
-                Err(e) => println!("Error stepping: {}", e),
             },
             "p" | "prev" | "back" => match engine.step_back() {
                 Ok(true) => {
-                    println!("Stepped back to previous instruction");
+                    logging::log_display(
+                        "Stepped back to previous instruction",
+                        logging::LogLevel::Info,
+                    );
                     display_instruction_context(engine, 3);
                 }
-                Ok(false) => println!("Cannot step back: no previous instruction"),
-                Err(e) => println!("Error stepping: {}", e),
+                Ok(false) => logging::log_display(
+                    "Cannot step back: no previous instruction",
+                    logging::LogLevel::Info,
+                ),
+                Err(e) => {
+                    logging::log_display(format!("Error stepping: {}", e), logging::LogLevel::Info)
+                }
             },
             "c" | "continue" => {
-                println!("Continuing execution...");
+                logging::log_display("Continuing execution...", logging::LogLevel::Info);
                 engine.continue_execution()?;
                 let result = engine.execute(function, args)?;
-                println!("Execution completed. Result: {:?}", result);
+                logging::log_display(
+                    format!("Execution completed. Result: {:?}", result),
+                    logging::LogLevel::Info,
+                );
                 break;
             }
             "i" | "info" => display_instruction_info(engine),
@@ -1499,15 +1687,23 @@ fn run_instruction_stepping(
                 let size = size_input.trim().parse().unwrap_or(5);
                 display_instruction_context(engine, size);
             }
-            "h" | "help" => println!("{}", Formatter::format_stepping_help()),
+            "h" | "help" => {
+                logging::log_display(Formatter::format_stepping_help(), logging::LogLevel::Info)
+            }
             "q" | "quit" | "exit" => {
-                println!("Exiting instruction stepping mode...");
+                logging::log_display(
+                    "Exiting instruction stepping mode...",
+                    logging::LogLevel::Info,
+                );
                 break;
             }
             _ => {
-                println!(
-                    "Unknown command: {}. Type 'help' for available commands.",
-                    input
+                logging::log_display(
+                    format!(
+                        "Unknown command: {}. Type 'help' for available commands.",
+                        input
+                    ),
+                    logging::LogLevel::Info,
                 );
             }
         }
@@ -1519,7 +1715,7 @@ fn run_instruction_stepping(
 fn display_instruction_context(engine: &DebuggerEngine, context_size: usize) {
     let context = engine.get_instruction_context(context_size);
     let formatted = Formatter::format_instruction_context(&context, context_size);
-    println!("{}", formatted);
+    logging::log_display(formatted, logging::LogLevel::Info);
 }
 
 fn display_instruction_info(engine: &DebuggerEngine) {
@@ -1531,37 +1727,58 @@ fn display_instruction_info(engine: &DebuggerEngine) {
             None
         };
 
-        println!(
-            "{}",
+        logging::log_display(
             Formatter::format_instruction_pointer_state(
                 ip.current_index(),
                 ip.call_stack_depth(),
                 step_mode,
                 ip.is_stepping(),
-            )
+            ),
+            logging::LogLevel::Info,
         );
 
-        println!(
-            "{}",
+        logging::log_display(
             Formatter::format_instruction_stats(
                 state.instructions().len(),
                 ip.current_index(),
                 state.step_count(),
-            )
+            ),
+            logging::LogLevel::Info,
         );
 
         if let Some(current_inst) = state.current_instruction() {
-            println!("Current Instruction Details:");
-            println!("  Name: {}", current_inst.name());
-            println!("  Offset: 0x{:08x}", current_inst.offset);
-            println!("  Function: {}", current_inst.function_index);
-            println!("  Local Index: {}", current_inst.local_index);
-            println!("  Operands: {}", current_inst.operands());
-            println!("  Control Flow: {}", current_inst.is_control_flow());
-            println!("  Function Call: {}", current_inst.is_call());
+            logging::log_display("Current Instruction Details:", logging::LogLevel::Info);
+            logging::log_display(
+                format!("  Name: {}", current_inst.name()),
+                logging::LogLevel::Info,
+            );
+            logging::log_display(
+                format!("  Offset: 0x{:08x}", current_inst.offset),
+                logging::LogLevel::Info,
+            );
+            logging::log_display(
+                format!("  Function: {}", current_inst.function_index),
+                logging::LogLevel::Info,
+            );
+            logging::log_display(
+                format!("  Local Index: {}", current_inst.local_index),
+                logging::LogLevel::Info,
+            );
+            logging::log_display(
+                format!("  Operands: {}", current_inst.operands()),
+                logging::LogLevel::Info,
+            );
+            logging::log_display(
+                format!("  Control Flow: {}", current_inst.is_control_flow()),
+                logging::LogLevel::Info,
+            );
+            logging::log_display(
+                format!("  Function Call: {}", current_inst.is_call()),
+                logging::LogLevel::Info,
+            );
         }
     } else {
-        println!("Cannot access debug state");
+        logging::log_display("Cannot access debug state", logging::LogLevel::Info);
     }
 }
 
@@ -1622,18 +1839,18 @@ pub fn show_budget_trend(contract: Option<&str>, function: Option<&str>) -> crat
         mem_points.push((i as f32, r.memory_used as f32));
     }
 
-    println!("\n--- CPU Usage Trend ---");
+    logging::log_display("\n--- CPU Usage Trend ---", logging::LogLevel::Info);
     Chart::new(100, 40, 0.0, (records.len() - 1).max(1) as f32)
         .lineplot(&Shape::Lines(&cpu_points))
         .display();
 
-    println!("\n--- Memory Usage Trend ---");
+    logging::log_display("\n--- Memory Usage Trend ---", logging::LogLevel::Info);
     Chart::new(100, 40, 0.0, (records.len() - 1).max(1) as f32)
         .lineplot(&Shape::Lines(&mem_points))
         .display();
 
     if let Some((cpu_reg, mem_reg)) = check_regression(&records) {
-        println!();
+        logging::log_display("", logging::LogLevel::Info);
         if cpu_reg > 0.0 {
             print_warning(format!(
                 "⚠️ ALERT: CPU usage regression detected! Increased by {:.2}% compared to the previous run.",
@@ -1693,7 +1910,7 @@ pub fn remote(args: RemoteArgs, _verbosity: Verbosity) -> Result<()> {
         match client.execute(function, args.args.as_deref()) {
             Ok(output) => {
                 print_success("Execution successful");
-                println!("Result: {}", output);
+                logging::log_display(format!("Result: {}", output), logging::LogLevel::Info);
             }
             Err(e) => {
                 print_warning(format!("Execution failed: {}", e));
@@ -1742,42 +1959,75 @@ pub fn remote(args: RemoteArgs, _verbosity: Verbosity) -> Result<()> {
                             None
                         };
                         match client.execute(parts[1], args.as_deref()) {
-                            Ok(output) => println!("Result: {}", output),
+                            Ok(output) => logging::log_display(
+                                format!("Result: {}", output),
+                                logging::LogLevel::Info,
+                            ),
                             Err(e) => print_warning(format!("Execution failed: {}", e)),
                         }
                     }
                 }
                 "step" | "s" => match client.step() {
                     Ok((paused, func, count)) => {
-                        println!("Step {}: function={:?}, paused={}", count, func, paused);
+                        logging::log_display(
+                            format!("Step {}: function={:?}, paused={}", count, func, paused),
+                            logging::LogLevel::Info,
+                        );
                     }
                     Err(e) => print_warning(format!("Step failed: {}", e)),
                 },
                 "continue" | "c" => match client.continue_execution() {
-                    Ok(completed) => println!("Execution completed: {}", completed),
+                    Ok(completed) => logging::log_display(
+                        format!("Execution completed: {}", completed),
+                        logging::LogLevel::Info,
+                    ),
                     Err(e) => print_warning(format!("Continue failed: {}", e)),
                 },
                 "inspect" | "i" => match client.inspect() {
                     Ok((func, count, paused, stack)) => {
-                        println!("Function: {:?}", func);
-                        println!("Step count: {}", count);
-                        println!("Paused: {}", paused);
-                        println!("Call stack: {:?}", stack);
+                        logging::log_display(
+                            format!("Function: {:?}", func),
+                            logging::LogLevel::Info,
+                        );
+                        logging::log_display(
+                            format!("Step count: {}", count),
+                            logging::LogLevel::Info,
+                        );
+                        logging::log_display(
+                            format!("Paused: {}", paused),
+                            logging::LogLevel::Info,
+                        );
+                        logging::log_display(
+                            format!("Call stack: {:?}", stack),
+                            logging::LogLevel::Info,
+                        );
                     }
                     Err(e) => print_warning(format!("Inspect failed: {}", e)),
                 },
                 "storage" => match client.get_storage() {
-                    Ok(storage) => println!("Storage: {}", storage),
+                    Ok(storage) => logging::log_display(
+                        format!("Storage: {}", storage),
+                        logging::LogLevel::Info,
+                    ),
                     Err(e) => print_warning(format!("Get storage failed: {}", e)),
                 },
                 "stack" => match client.get_stack() {
-                    Ok(stack) => println!("Call stack: {:?}", stack),
+                    Ok(stack) => logging::log_display(
+                        format!("Call stack: {:?}", stack),
+                        logging::LogLevel::Info,
+                    ),
                     Err(e) => print_warning(format!("Get stack failed: {}", e)),
                 },
                 "budget" | "b" => match client.get_budget() {
                     Ok((cpu, mem)) => {
-                        println!("CPU instructions: {}", cpu);
-                        println!("Memory bytes: {}", mem);
+                        logging::log_display(
+                            format!("CPU instructions: {}", cpu),
+                            logging::LogLevel::Info,
+                        );
+                        logging::log_display(
+                            format!("Memory bytes: {}", mem),
+                            logging::LogLevel::Info,
+                        );
                     }
                     Err(e) => print_warning(format!("Get budget failed: {}", e)),
                 },
@@ -1804,10 +2054,10 @@ pub fn remote(args: RemoteArgs, _verbosity: Verbosity) -> Result<()> {
                 "list-breaks" => match client.list_breakpoints() {
                     Ok(breaks) => {
                         if breaks.is_empty() {
-                            println!("No breakpoints set");
+                            logging::log_display("No breakpoints set", logging::LogLevel::Info);
                         } else {
                             for bp in breaks {
-                                println!("- {}", bp);
+                                logging::log_display(format!("- {}", bp), logging::LogLevel::Info);
                             }
                         }
                     }
@@ -1818,21 +2068,60 @@ pub fn remote(args: RemoteArgs, _verbosity: Verbosity) -> Result<()> {
                     Err(e) => print_warning(format!("Ping failed: {}", e)),
                 },
                 "help" | "h" => {
-                    println!("Remote debugger commands:");
-                    println!("  load <path>          Load a contract");
-                    println!("  exec <func> [args]    Execute a function");
-                    println!("  step | s             Step execution");
-                    println!("  continue | c          Continue execution");
-                    println!("  inspect | i           Inspect current state");
-                    println!("  storage               Show storage state");
-                    println!("  stack                 Show call stack");
-                    println!("  budget | b            Show budget usage");
-                    println!("  break <func>          Set breakpoint");
-                    println!("  clear <func>          Clear breakpoint");
-                    println!("  list-breaks           List breakpoints");
-                    println!("  ping                  Ping server");
-                    println!("  help | h              Show this help");
-                    println!("  quit | q              Exit");
+                    logging::log_display("Remote debugger commands:", logging::LogLevel::Info);
+                    logging::log_display(
+                        "  load <path>          Load a contract",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display(
+                        "  exec <func> [args]    Execute a function",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display(
+                        "  step | s             Step execution",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display(
+                        "  continue | c          Continue execution",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display(
+                        "  inspect | i           Inspect current state",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display(
+                        "  storage               Show storage state",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display(
+                        "  stack                 Show call stack",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display(
+                        "  budget | b            Show budget usage",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display(
+                        "  break <func>          Set breakpoint",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display(
+                        "  clear <func>          Clear breakpoint",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display(
+                        "  list-breaks           List breakpoints",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display(
+                        "  ping                  Ping server",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display(
+                        "  help | h              Show this help",
+                        logging::LogLevel::Info,
+                    );
+                    logging::log_display("  quit | q              Exit", logging::LogLevel::Info);
                 }
                 "quit" | "q" | "exit" => {
                     let _ = client.disconnect();
@@ -1879,4 +2168,8 @@ pub async fn repl(args: ReplArgs) -> Result<()> {
     start_repl(config).await?;
 
     Ok(())
+}
+
+pub fn scenario(args: ScenarioArgs, verbosity: Verbosity) -> Result<()> {
+    crate::scenario::run_scenario(args, verbosity)
 }

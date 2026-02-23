@@ -151,9 +151,10 @@ impl BatchExecutor {
     pub fn display_results(results: &[BatchResult], summary: &BatchSummary) {
         use crate::ui::formatter::Formatter;
 
-        println!("\n{}", "=".repeat(80));
-        println!("  Batch Execution Results");
-        println!("{}", "=".repeat(80));
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=".repeat(80), crate::logging::LogLevel::Info);
+        crate::logging::log_display("  Batch Execution Results", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=".repeat(80), crate::logging::LogLevel::Info);
 
         for result in results {
             let status = if result.passed {
@@ -166,52 +167,89 @@ impl BatchExecutor {
 
             let default_label = format!("Test #{}", result.index);
             let label = result.label.as_deref().unwrap_or(&default_label);
-            println!("\n{} {}", status, label);
-            println!("  Args: {}", result.args);
+            crate::logging::log_display(
+                format!("\n{} {}", status, label),
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display(
+                format!("  Args: {}", result.args),
+                crate::logging::LogLevel::Info,
+            );
 
             if result.success {
-                println!("  Result: {}", result.result);
+                crate::logging::log_display(
+                    format!("  Result: {}", result.result),
+                    crate::logging::LogLevel::Info,
+                );
                 if let Some(expected) = &result.expected {
-                    println!("  Expected: {}", expected);
+                    crate::logging::log_display(
+                        format!("  Expected: {}", expected),
+                        crate::logging::LogLevel::Info,
+                    );
                     if !result.passed {
-                        println!(
-                            "  {}",
-                            Formatter::warning("Result does not match expected value")
+                        crate::logging::log_display(
+                            format!(
+                                "  {}",
+                                Formatter::warning("Result does not match expected value")
+                            ),
+                            crate::logging::LogLevel::Warn,
                         );
                     }
                 }
             } else if let Some(error) = &result.error {
-                println!("  Error: {}", Formatter::error(error));
+                crate::logging::log_display(
+                    format!("  Error: {}", Formatter::error(error)),
+                    crate::logging::LogLevel::Error,
+                );
             }
 
-            println!("  Duration: {}ms", result.duration_ms);
+            crate::logging::log_display(
+                format!("  Duration: {}ms", result.duration_ms),
+                crate::logging::LogLevel::Info,
+            );
         }
 
-        println!("\n{}", "=".repeat(80));
-        println!("  Summary");
-        println!("{}", "=".repeat(80));
-        println!("  Total:    {}", summary.total);
-        println!(
-            "  {}",
-            Formatter::success(format!("Passed:   {}", summary.passed))
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=".repeat(80), crate::logging::LogLevel::Info);
+        crate::logging::log_display("  Summary", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=".repeat(80), crate::logging::LogLevel::Info);
+        crate::logging::log_display(
+            format!("  Total:    {}", summary.total),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!(
+                "  {}",
+                Formatter::success(format!("Passed:   {}", summary.passed))
+            ),
+            crate::logging::LogLevel::Info,
         );
 
         if summary.failed > 0 {
-            println!(
-                "  {}",
-                Formatter::warning(format!("Failed:   {}", summary.failed))
+            crate::logging::log_display(
+                format!(
+                    "  {}",
+                    Formatter::warning(format!("Failed:   {}", summary.failed))
+                ),
+                crate::logging::LogLevel::Warn,
             );
         }
 
         if summary.errors > 0 {
-            println!(
-                "  {}",
-                Formatter::error(format!("Errors:   {}", summary.errors))
+            crate::logging::log_display(
+                format!(
+                    "  {}",
+                    Formatter::error(format!("Errors:   {}", summary.errors))
+                ),
+                crate::logging::LogLevel::Error,
             );
         }
 
-        println!("  Duration: {}ms", summary.total_duration_ms);
-        println!("{}", "=".repeat(80));
+        crate::logging::log_display(
+            format!("  Duration: {}ms", summary.total_duration_ms),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display("=".repeat(80), crate::logging::LogLevel::Info);
     }
 }
 
