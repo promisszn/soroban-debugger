@@ -206,7 +206,7 @@ fn main() -> miette::Result<()> {
                         functions: true,
                         metadata: false,
                         expected_hash: None,
-                        dependency_graph: false,
+                        dependency_graph: None,
                     },
                     verbosity,
                 );
