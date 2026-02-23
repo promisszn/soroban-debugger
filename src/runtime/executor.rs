@@ -100,6 +100,32 @@ impl ContractExecutor {
         self.timeout_secs = secs;
     }
 
+    /// Enable auth mocking for interactive/test-like execution flows (e.g. REPL).
+    pub fn enable_mock_all_auths(&self) {
+        self.env.mock_all_auths();
+    }
+
+    /// Generate a test account address (StrKey) for REPL shorthand aliases.
+    pub fn generate_repl_account_strkey(&self) -> Result<String> {
+        use soroban_sdk::testutils::Address as _;
+
+        let addr = Address::generate(&self.env);
+        let debug = format!("{:?}", addr);
+        for token in debug
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|s| !s.is_empty())
+        {
+            if (token.starts_with('G') || token.starts_with('C')) && token.len() >= 10 {
+                return Ok(token.to_string());
+            }
+        }
+
+        Err(DebuggerError::ExecutionError(format!(
+            "Failed to format generated REPL address alias (debug={debug})"
+        ))
+        .into())
+    }
+
     /// Execute a contract function.
     #[tracing::instrument(skip(self), fields(function = function))]
     pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<String> {

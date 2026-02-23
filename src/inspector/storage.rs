@@ -2,7 +2,9 @@ use crate::{DebuggerError, Result};
 use crossterm::style::{Color, Stylize};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use soroban_env_host::budget::AsBudget;
 use soroban_env_host::Host;
+use soroban_env_host::xdr::{LedgerEntryData, LedgerKey};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -351,19 +353,42 @@ impl StorageInspector {
 
     /// Capture a snapshot of all storage entries from the host
     pub fn capture_snapshot(host: &Host) -> HashMap<String, String> {
-        let mut snapshot = HashMap::new();
-        let _ = host.with_mut_storage(|storage| {
-            for (key, entry) in &storage.map {
-                let key_str = format!("{:?}", key);
-                let entry_str = match entry {
-                    Some(e) => format!("{:?}", e),
-                    None => "<deleted>".to_string(),
+        match host.with_mut_storage(|storage| {
+            let mut snapshot = HashMap::new();
+
+            for (key, entry_opt) in storage.map.iter(host.as_budget())? {
+                let Some((entry, ttl)) = entry_opt.as_ref() else {
+                    continue;
                 };
-                snapshot.insert(key_str, entry_str);
+
+                let key_str = match key.as_ref() {
+                    LedgerKey::ContractData(cd) => {
+                        format!("contract_data:{:?}:{:?}", cd.durability, cd.key)
+                    }
+                    LedgerKey::ContractCode(_) => "contract_code".to_string(),
+                    other => format!("{:?}", other),
+                };
+
+                let mut value_str = match &entry.as_ref().data {
+                    LedgerEntryData::ContractData(cd) => format!("{:?}", cd.val),
+                    other => format!("{:?}", other),
+                };
+
+                if let Some(live_until) = ttl {
+                    value_str.push_str(&format!(" (ttl={})", live_until));
+                }
+
+                snapshot.insert(key_str, value_str);
             }
-            Ok(())
-        });
-        snapshot
+
+            Ok(snapshot)
+        }) {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                tracing::warn!("Failed to capture storage snapshot: {}", e);
+                HashMap::new()
+            }
+        }
     }
 
     /// Compute the difference between two storage snapshots
@@ -387,14 +412,14 @@ impl StorageInspector {
                 Some(val_before) => {
                     if val_before != val_after {
                         modified.insert(key.clone(), (val_before.clone(), val_after.clone()));
-                        if alert_filter.matches(key) {
+                        if !alerts.is_empty() && alert_filter.matches(key) {
                             triggered_alerts.push(key.clone());
                         }
                     }
                 }
                 None => {
                     added.insert(key.clone(), val_after.clone());
-                    if alert_filter.matches(key) {
+                    if !alerts.is_empty() && alert_filter.matches(key) {
                         triggered_alerts.push(key.clone());
                     }
                 }
@@ -404,7 +429,7 @@ impl StorageInspector {
         for key in before.keys() {
             if !after.contains_key(key) {
                 deleted.push(key.clone());
-                if alert_filter.matches(key) {
+                if !alerts.is_empty() && alert_filter.matches(key) {
                     triggered_alerts.push(key.clone());
                 }
             }
