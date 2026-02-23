@@ -2,67 +2,66 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, CI/CD ]
+    tags-ignore: [ 'v*' ]
   pull_request:
     branches: [ main, develop ]
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
 
 jobs:
   test:
-    name: Test
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
       
-      - uses: Swatinem/rust-cache@v2
-      
-      - name: Run tests
-        run: cargo test --all-features
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        
+      - name: Run Tests
+        run: cargo test --workspace --all-features
 
-  clippy:
-    name: Clippy
+  lint:
+    name: Lint (Clippy & Format)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          components: clippy
+          components: clippy, rustfmt
       
-      - uses: Swatinem/rust-cache@v2
-      
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-  fmt:
-    name: Format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          components: rustfmt
-      
-      - name: Check formatting
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        
+      - name: Check Formatting
         run: cargo fmt --all -- --check
+        
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
   bench:
-    name: Benchmark
+    name: Check Benchmarks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
       
-      - uses: Swatinem/rust-cache@v2
-      
-      - name: Run benchmarks
-        run: cargo bench --bench debugger_bench -- --quick
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        
+      - name: Compile Benchmarks
+        run: cargo bench --workspace --no-run

@@ -14,7 +14,7 @@ impl MockRegistry {
         );
     }
 
-    pub fn install(&self, env: &Env) {
+    pub fn install(&self, _env: &Env) {
         // For the MVP, we'll document that cross-contract mocking
         // with this helper should be used with specific contracts.
         // A full implementation would involve registering a dispatcher
