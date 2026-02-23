@@ -168,7 +168,7 @@ fn main() -> miette::Result<()> {
             soroban_debugger::cli::commands::optimize(args, verbosity)
         }
         Some(Commands::UpgradeCheck(args)) => {
-            soroban_debugger::cli::commands::upgrade_check(args, verbosity)
+            soroban_debugger::cli::commands::upgrade_check(args)
         }
         Some(Commands::Compare(args)) => soroban_debugger::cli::commands::compare(args),
 @@ -195,50 +200,61 @@ fn main() -> miette::Result<()> {
@@ -191,12 +191,8 @@ fn main() -> miette::Result<()> {
         Some(Commands::Repl(mut args)) => {
             args.merge_config(&config);
             tokio::runtime::Runtime::new()
-                .map_err(|e| miette::miette!(e))?
-                .block_on(soroban_debugger::cli::commands::repl(args))
-                .map_err(|e| miette::miette!(e))
-        }
-        Commands::UpgradeCheck(args) => {
-            soroban_debugger::cli::commands::upgrade_check(args)?;
+                .map_err(|e: std::io::Error| miette::miette!(e))
+                .and_then(|rt| rt.block_on(soroban_debugger::cli::commands::repl(args)))
         }
         None => {
             if let Some(path) = cli.list_functions {

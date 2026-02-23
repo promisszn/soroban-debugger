@@ -1,25 +1,3 @@
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn main() {
-    let git_hash = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    // Get rustc version
-    let rustc_version = Command::new("rustc")
-        .arg("--version")
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    // Get build date
 use clap::CommandFactory;
 use std::fs;
 use std::io;

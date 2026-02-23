@@ -1,12 +1,13 @@
-use crate::analyzer::upgrade::{FunctionSignature, WasmType};
-use crate::Result;
-use wasmparser::{CompositeType, Parser, Payload, TypeRef, ValType};
 use crate::{DebuggerError, Result};
+use crate::analyzer::upgrade::WasmType;
+use wasmparser::{CompositeType, Parser, Payload, TypeRef, ValType};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
-use wasmparser::{Parser, Payload};
+
+// Re-export FunctionSignature for convenience
+pub use crate::analyzer::upgrade::FunctionSignature;
 // ─── existing public API (unchanged) ─────────────────────────────────────────
 
 /// Compute the SHA-256 checksum of a WASM binary.
@@ -199,84 +200,11 @@ pub struct ModuleInfo {
     pub type_count: u32,
     pub function_count: u32,
     pub export_count: u32,
-}
-
-/// Parse full function signatures (name + param types + return types) from WASM
-pub fn parse_function_signatures(wasm_bytes: &[u8]) -> Result<Vec<FunctionSignature>> {
-    // Step 1: collect all type definitions indexed by type index
-    let mut func_types: Vec<Option<wasmparser::FuncType>> = Vec::new();
-    // Type indices for imported functions (in import order)
-    let mut import_type_indices: Vec<u32> = Vec::new();
-    // Type indices for local functions (in function-section order)
-    let mut local_type_indices: Vec<u32> = Vec::new();
-    // Exported function names and their function indices
-    let mut exports: Vec<(String, u32)> = Vec::new();
-
-    let parser = Parser::new(0);
-    for payload in parser.parse_all(wasm_bytes) {
-        match payload? {
-            Payload::TypeSection(reader) => {
-                for rec_group in reader {
-                    let rec_group = rec_group?;
-                    for sub_type in rec_group.into_types() {
-                        match sub_type.composite_type {
-                            CompositeType::Func(ft) => func_types.push(Some(ft)),
-                            _ => func_types.push(None),
-                        }
-                    }
-                }
-            }
-            Payload::ImportSection(reader) => {
-                for import in reader {
-                    let import = import?;
-                    if let TypeRef::Func(type_idx) = import.ty {
-                        import_type_indices.push(type_idx);
-                    }
-                }
-            }
-            Payload::FunctionSection(reader) => {
-                for type_idx in reader {
-                    local_type_indices.push(type_idx?);
-                }
-            }
-            Payload::ExportSection(reader) => {
-                for export in reader {
-                    let export = export?;
-                    if matches!(export.kind, wasmparser::ExternalKind::Func) {
-                        exports.push((export.name.to_string(), export.index));
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Step 2: build combined function-index → type-index map
-    let all_type_indices: Vec<u32> = import_type_indices
-        .iter()
-        .chain(local_type_indices.iter())
-        .copied()
-        .collect();
-
-    // Step 3: resolve each export to a FunctionSignature
-    let mut signatures = Vec::new();
-    for (name, func_idx) in exports {
-        let func_idx = func_idx as usize;
-        if func_idx >= all_type_indices.len() {
-            continue;
-        }
-        let type_idx = all_type_indices[func_idx] as usize;
-        if type_idx >= func_types.len() {
-            continue;
-        }
-        if let Some(ft) = &func_types[type_idx] {
-            let params = ft.params().iter().map(val_type_to_wasm_type).collect();
-            let results = ft.results().iter().map(val_type_to_wasm_type).collect();
-            signatures.push(FunctionSignature { name, params, results });
-        }
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<WasmSection>,
 }
 
+/// Parse full function signatures (name + param types + return types) from WASM
 /// Represents a single section within a WASM binary.
 #[derive(Debug, Serialize, Clone)]
 pub struct WasmSection {
@@ -505,15 +433,16 @@ pub fn extract_contract_metadata(wasm_bytes: &[u8]) -> Result<ContractMetadata> 
 // ─── contract spec / function signatures ─────────────────────────────────────
 
 /// A single function parameter: name and its Soroban type as a display string.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// A function parameter for a contract spec-level signature.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FunctionParam {
     pub name: String,
     pub type_name: String,
 }
 
-/// Full signature for one exported contract function.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct FunctionSignature {
+/// A full contract-spec-level signature for one exported contract function.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractFunctionSignature {
     pub name: String,
     pub params: Vec<FunctionParam>,
     pub return_type: Option<String>,
@@ -584,7 +513,7 @@ fn stringm_to_string(bytes: &[u8]) -> String {
 /// Returns an empty `Vec` (not an error) when no spec section is present —
 /// this keeps callers simple and backward-compatible with contracts that
 /// pre-date the spec section.
-pub fn parse_function_signatures(wasm_bytes: &[u8]) -> Result<Vec<FunctionSignature>> {
+pub fn parse_function_signatures(wasm_bytes: &[u8]) -> Result<Vec<ContractFunctionSignature>> {
     use stellar_xdr::curr::{Limited, Limits, ReadXdr, ScSpecEntry};
 
     let mut signatures = Vec::new();
@@ -622,7 +551,7 @@ pub fn parse_function_signatures(wasm_bytes: &[u8]) -> Result<Vec<FunctionSignat
 
                     let return_type = func.outputs.first().map(spec_type_to_string);
 
-                    signatures.push(FunctionSignature {
+                    signatures.push(ContractFunctionSignature {
                         name,
                         params,
                         return_type,

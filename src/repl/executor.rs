@@ -5,7 +5,7 @@
 use super::ReplConfig;
 use crate::inspector::StorageInspector;
 use crate::runtime::executor::ContractExecutor;
-use crate::utils::wasm::{parse_function_signatures, FunctionSignature};
+use crate::utils::wasm::{parse_function_signatures, ContractFunctionSignature};
 use crate::Result;
 use serde_json::json;
 use serde_json::Value;
@@ -15,7 +15,7 @@ use std::fs;
 /// Executor for REPL commands
 pub struct ReplExecutor {
     executor: ContractExecutor,
-    signatures: HashMap<String, FunctionSignature>,
+    signatures: HashMap<String, ContractFunctionSignature>,
     address_aliases: HashMap<String, String>,
 }
 
@@ -91,7 +91,7 @@ impl ReplExecutor {
 
     fn typed_repl_args(
         &mut self,
-        signature: &FunctionSignature,
+        signature: &ContractFunctionSignature,
         args: &[String],
     ) -> Result<Vec<Value>> {
         let mut values = Vec::with_capacity(args.len());

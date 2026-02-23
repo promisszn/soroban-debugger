@@ -132,15 +132,15 @@ pub enum Commands {
 
     /// Check compatibility between two contract versions
     UpgradeCheck(UpgradeCheckArgs),
+
     /// Generate shell completion scripts
     Completions(CompletionsArgs),
+
     /// Analyze contract and generate gas optimization suggestions
     Optimize(OptimizeArgs),
 
     /// Profile a single function execution and print hotspots + suggestions
     Profile(ProfileArgs),
-    /// Check compatibility between two contract versions
-    UpgradeCheck(UpgradeCheckArgs),
 
     /// Compare two execution trace JSON files side-by-side
     Compare(CompareArgs),
@@ -248,6 +248,10 @@ pub struct RunArgs {
     /// Filter events by topic (deprecated single value). Prefer using --event-filter (repeatable).
     #[arg(long)]
     pub filter_topic: Option<String>,
+
+    /// Filter events by topic pattern (repeatable)
+    #[arg(long, value_name = "PATTERN")]
+    pub event_filter: Vec<String>,
 
     /// Execute the contract call N times for stress testing
     #[arg(long)]
@@ -458,6 +462,14 @@ pub struct InspectArgs {
     /// Show contract metadata
     #[arg(long)]
     pub metadata: bool,
+
+    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
+    #[arg(long)]
+    pub expected_hash: Option<String>,
+
+    /// Show cross-contract dependency graph in specified format
+    #[arg(long, value_enum)]
+    pub dependency_graph: Option<GraphFormat>,
 }
 
 #[derive(Parser)]
@@ -482,15 +494,6 @@ pub struct UpgradeCheckArgs {
     /// e.g. '{"vote": [1, true], "create_proposal": ["title", "desc"]}'
     #[arg(long)]
     pub test_inputs: Option<String>,
-}
-
-    /// Expected SHA-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match.
-    #[arg(long)]
-    pub expected_hash: Option<String>,
-
-    /// Show cross-contract dependency graph in specified format
-    #[arg(long, value_enum)]
-    pub dependency_graph: Option<GraphFormat>,
 }
 
 #[derive(Parser)]
@@ -530,29 +533,6 @@ pub struct OptimizeArgs {
     /// Deprecated: use --network-snapshot instead
     #[arg(long, hide = true, alias = "snapshot")]
     pub snapshot: Option<PathBuf>,
-}
-
-#[derive(Parser)]
-pub struct UpgradeCheckArgs {
-    /// Path to the old contract WASM file
-    #[arg(short, long)]
-    pub old: PathBuf,
-
-    /// Path to the new contract WASM file
-    #[arg(short, long)]
-    pub new: PathBuf,
-
-    /// Function name to test side-by-side (optional)
-    #[arg(short, long)]
-    pub function: Option<String>,
-
-    /// Function arguments as JSON array for side-by-side test
-    #[arg(short, long)]
-    pub args: Option<String>,
-
-    /// Output file for the compatibility report (default: stdout)
-    #[arg(long)]
-    pub output: Option<PathBuf>,
 }
 
 #[cfg(test)]
