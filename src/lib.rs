@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 pub mod analyzer;
 pub mod batch;
 pub mod cli;

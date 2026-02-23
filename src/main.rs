@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
 use soroban_debugger::cli::{Cli, Commands, Verbosity};

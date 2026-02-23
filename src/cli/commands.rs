@@ -368,35 +368,44 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
         let mut ledger_inspector = crate::inspector::ledger::LedgerEntryInspector::new();
         ledger_inspector.set_ttl_warning_threshold(args.ttl_warning_threshold);
 
-        // Extract ledger entries from storage snapshots
-        // Instance entries (from the after-snapshot, representing accessed state)
-        for (key, value) in &storage_after {
-            let storage_type = if key.starts_with("instance:") || key.starts_with("Instance") {
-                crate::inspector::ledger::StorageType::Instance
-            } else if key.starts_with("temp:") || key.starts_with("Temporary") {
-                crate::inspector::ledger::StorageType::Temporary
-            } else {
-                crate::inspector::ledger::StorageType::Persistent
-            };
+        match engine.executor_mut().finish() {
+            Ok((footprint, storage)) => {
+                let mut footprint_map = std::collections::HashMap::new();
+                for (k, v) in &footprint.0 {
+                    footprint_map.insert(k.clone(), v.clone());
+                }
 
-            let was_read = storage_before.contains_key(key);
-            let was_written = storage_after.get(key) != storage_before.get(key);
-
-            // Simulated TTL based on storage type defaults
-            let ttl = match storage_type {
-                crate::inspector::ledger::StorageType::Instance => 999_999,
-                crate::inspector::ledger::StorageType::Persistent => 120_960,
-                crate::inspector::ledger::StorageType::Temporary => 17_280,
-            };
-
-            ledger_inspector.add_entry(
-                key.clone(),
-                value.clone(),
-                storage_type,
-                ttl,
-                was_read || !was_written,
-                was_written,
-            );
+                for (key, val_opt) in &storage.map {
+                    if let Some(access_type) = footprint_map.get(key) {
+                            if let Some((entry, ttl)) = val_opt {
+                                let key_str = format!("{:?}", **key);
+                                let storage_type = if key_str.contains("Temporary") || key_str.contains("temporary") {
+                                    crate::inspector::ledger::StorageType::Temporary
+                                } else if key_str.contains("Instance") || key_str.contains("instance") || key_str.contains("LedgerKeyContractInstance") {
+                                    crate::inspector::ledger::StorageType::Instance
+                                } else {
+                                    crate::inspector::ledger::StorageType::Persistent
+                                };
+                                
+                                use soroban_env_host::storage::AccessType;
+                                let is_read = true; // Everything in the footprint is at least read
+                                let is_write = matches!(*access_type, AccessType::ReadWrite);
+                                
+                                ledger_inspector.add_entry(
+                                    format!("{:?}", **key),
+                                    format!("{:?}", **entry),
+                                    storage_type,
+                                    ttl.unwrap_or(0),
+                                    is_read,
+                                    is_write,
+                                );
+                            }
+                        }
+                    }
+            }
+            Err(e) => {
+                print_warning(format!("Failed to extract ledger footprint: {}", e));
+            }
         }
 
         ledger_inspector.display();
