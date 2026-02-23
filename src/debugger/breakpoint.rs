@@ -47,6 +47,28 @@ impl BreakpointManager {
     pub fn count(&self) -> usize {
         self.breakpoints.len()
     }
+
+    /// Parse a condition string into a Condition object
+    /// Note: This feature is not yet fully implemented
+    #[allow(dead_code)]
+    pub fn parse_condition(_s: &str) -> crate::Result<()> {
+        use crate::DebuggerError;
+        Err(DebuggerError::BreakpointError(
+            "Conditional breakpoints are not yet implemented".to_string(),
+        )
+        .into())
+    }
+}
+
+#[allow(dead_code)]
+fn find_operator(s: &str) -> Option<(&'static str, usize)> {
+    let ops = [">=", "<=", "==", "!=", ">", "<"];
+    for op in ops {
+        if let Some(pos) = s.find(op) {
+            return Some((op, pos));
+        }
+    }
+    None
 }
 
 impl Default for BreakpointManager {

@@ -1,0 +1,32 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH inspect 1  "inspect " 
+.SH NAME
+inspect \- Inspect contract information without executing
+.SH SYNOPSIS
+\fBinspect\fR <\fB\-c\fR|\fB\-\-contract\fR> [\fB\-\-functions\fR] [\fB\-\-metadata\fR] [\fB\-\-expected\-hash\fR] [\fB\-\-dependency\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Inspect contract information without executing
+.SH OPTIONS
+.TP
+\fB\-c\fR, \fB\-\-contract\fR \fI<CONTRACT>\fR
+Path to the contract WASM file
+.TP
+\fB\-\-functions\fR
+Show exported functions
+.TP
+\fB\-\-metadata\fR
+Show contract metadata
+.TP
+\fB\-\-expected\-hash\fR \fI<EXPECTED_HASH>\fR
+Expected SHA\-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match
+.TP
+\fB\-\-dependency\-graph\fR \fI<DEPENDENCY_GRAPH>\fR
+Show cross\-contract dependency graph in specified format
+.br
+
+.br
+[\fIpossible values: \fRdot, mermaid]
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

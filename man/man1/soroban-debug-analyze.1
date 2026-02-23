@@ -1,0 +1,28 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH analyze 1  "analyze " 
+.SH NAME
+analyze \- Analyze contract for security vulnerabilities
+.SH SYNOPSIS
+\fBanalyze\fR <\fB\-c\fR|\fB\-\-contract\fR> [\fB\-f\fR|\fB\-\-function\fR] [\fB\-a\fR|\fB\-\-args\fR] [\fB\-s\fR|\fB\-\-storage\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Analyze contract for security vulnerabilities
+.SH OPTIONS
+.TP
+\fB\-c\fR, \fB\-\-contract\fR \fI<CONTRACT>\fR
+Path to the contract WASM file
+.TP
+\fB\-f\fR, \fB\-\-function\fR \fI<FUNCTION>\fR
+Function name to execute for dynamic analysis (optional)
+.TP
+\fB\-a\fR, \fB\-\-args\fR \fI<ARGS>\fR
+Function arguments as JSON array for dynamic analysis (optional)
+.TP
+\fB\-s\fR, \fB\-\-storage\fR \fI<STORAGE>\fR
+Initial storage state as JSON object (optional)
+.TP
+\fB\-\-format\fR \fI<FORMAT>\fR [default: text]
+Output format (text, json)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

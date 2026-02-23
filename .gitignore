@@ -1,5 +1,8 @@
 # Rust
 /target/
+target/
+**/target/
+**/target/**
 **/*.rs.bk
 *.pdb
 Cargo.lock
@@ -15,6 +18,7 @@ Cargo.lock
 # Test outputs
 /tests/outputs/
 *.wasm
+!tests/fixtures/wasm/*.wasm
 
 # Logs
 *.log

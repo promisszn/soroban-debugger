@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH repl 1  "repl " 
+.SH NAME
+repl \- Start an interactive REPL for contract exploration
+.SH SYNOPSIS
+\fBrepl\fR <\fB\-c\fR|\fB\-\-contract\fR> [\fB\-\-network\-snapshot\fR] [\fB\-s\fR|\fB\-\-storage\fR] [\fB\-\-expected\-hash\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Start an interactive REPL for contract exploration
+.SH OPTIONS
+.TP
+\fB\-c\fR, \fB\-\-contract\fR \fI<CONTRACT>\fR
+Path to the contract WASM file
+.TP
+\fB\-\-network\-snapshot\fR \fI<NETWORK_SNAPSHOT>\fR
+Network snapshot file to load before starting REPL session Network snapshot file to load before starting interactive session
+.TP
+\fB\-s\fR, \fB\-\-storage\fR \fI<STORAGE>\fR
+Initial storage state as JSON object
+.TP
+\fB\-\-expected\-hash\fR \fI<EXPECTED_HASH>\fR
+Expected SHA\-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

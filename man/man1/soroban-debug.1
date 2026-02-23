@@ -1,0 +1,94 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH soroban-debug 1  "soroban-debug 0.1.0" 
+.SH NAME
+soroban\-debug \- A debugger for Soroban smart contracts
+.SH SYNOPSIS
+\fBsoroban\-debug\fR [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-no\-banner\fR] [\fB\-\-budget\-trend\fR] [\fB\-\-trend\-contract\fR] [\fB\-\-trend\-function\fR] [\fB\-\-version\-verbose\fR] [\fB\-\-list\-functions\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
+.SH DESCRIPTION
+A debugger for Soroban smart contracts
+.SH OPTIONS
+.TP
+\fB\-q\fR, \fB\-\-quiet\fR
+Suppress non\-essential output (errors and return value only)
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Show verbose output including internal details
+.TP
+\fB\-\-no\-banner\fR
+Suppress startup banner output
+.TP
+\fB\-\-budget\-trend\fR
+Show historical budget trend visualization
+.TP
+\fB\-\-trend\-contract\fR \fI<TREND_CONTRACT>\fR
+Filter budget trend by contract hash
+.TP
+\fB\-\-trend\-function\fR \fI<TREND_FUNCTION>\fR
+Filter budget trend by function name
+.TP
+\fB\-\-version\-verbose\fR
+Show detailed version information
+.TP
+\fB\-\-list\-functions\fR \fI<LIST_FUNCTIONS>\fR
+Show exported functions for a given contract (shorthand for inspect \-\-functions)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+soroban\-debug\-run(1)
+Run a contract function with the debugger
+.TP
+soroban\-debug\-interactive(1)
+Start an interactive debugging session
+.TP
+soroban\-debug\-repl(1)
+Start an interactive REPL for contract exploration
+.TP
+soroban\-debug\-tui(1)
+Launch the full\-screen TUI dashboard
+.TP
+soroban\-debug\-inspect(1)
+Inspect contract information without executing
+.TP
+soroban\-debug\-completions(1)
+Generate shell completion scripts
+.TP
+soroban\-debug\-optimize(1)
+Analyze contract and generate gas optimization suggestions
+.TP
+soroban\-debug\-profile(1)
+Profile a single function execution and print hotspots + suggestions
+.TP
+soroban\-debug\-upgrade\-check(1)
+Check compatibility between two contract versions
+.TP
+soroban\-debug\-compare(1)
+Compare two execution trace JSON files side\-by\-side
+.TP
+soroban\-debug\-replay(1)
+Replay execution from a previously exported trace file
+.TP
+soroban\-debug\-symbolic(1)
+Run symbolic execution to explore contract input space
+.TP
+soroban\-debug\-server(1)
+Start debug server for remote connections
+.TP
+soroban\-debug\-remote(1)
+Connect to remote debug server
+.TP
+soroban\-debug\-analyze(1)
+Analyze contract for security vulnerabilities
+.TP
+soroban\-debug\-scenario(1)
+Run a multi\-step scenario from a TOML file
+.TP
+soroban\-debug\-help(1)
+Print this message or the help of the given subcommand(s)
+.SH VERSION
+v0.1.0
