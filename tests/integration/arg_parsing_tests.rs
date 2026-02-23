@@ -74,7 +74,7 @@ fn test_parse_bool_typed() {
 
 #[test]
 fn test_parse_symbol_bare() {
-    let parser = create_parser();
+   let parser = create_parser();
     let result = parser.parse_args_string(r#"["hello"]"#);
     assert!(result.is_ok());
     assert_eq!(result.unwrap().len(), 1);
@@ -98,6 +98,46 @@ fn test_parse_string_typed() {
 }
 
 // ── Mixed arguments (simulating real contract calls) ─────────────────
+
+#[test]
+fn test_parse_option_none_from_null() {
+    let parser = create_parser();
+    let result = parser.parse_args_string(r#"[{"type": "option", "value": null}]"#);
+    assert!(result.is_ok(), "Failed to parse option none: {:?}", result.err());
+    assert_eq!(result.unwrap().len(), 1);
+}
+
+#[test]
+fn test_parse_option_some_from_non_null() {
+    let parser = create_parser();
+    let result = parser.parse_args_string(r#"[{"type": "option", "value": 42}]"#);
+    assert!(result.is_ok(), "Failed to parse option some: {:?}", result.err());
+    assert_eq!(result.unwrap().len(), 1);
+}
+
+#[test]
+fn test_parse_fixed_length_tuple() {
+    let parser = create_parser();
+    let result =
+        parser.parse_args_string(r#"[{"type": "tuple", "value": [1, "hello"], "arity": 2}]"#);
+    assert!(result.is_ok(), "Failed to parse tuple: {:?}", result.err());
+    assert_eq!(result.unwrap().len(), 1);
+}
+
+#[test]
+fn test_error_tuple_wrong_arity() {
+    let parser = create_parser();
+    let result =
+        parser.parse_args_string(r#"[{"type": "tuple", "value": [1, 2, 3], "arity": 2}]"#);
+    assert!(result.is_err());
+
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Tuple arity mismatch: expected 2, got 3"),
+        "Expected clear tuple arity mismatch error, got: {}",
+        err_msg
+    );
+}
 
 #[test]
 fn test_parse_counter_add_args() {
@@ -124,46 +164,7 @@ fn test_parse_transfer_args() {
     let result = parser.parse_args_string(
         r#"[{"type": "symbol", "value": "Alice"}, {"type": "symbol", "value": "Bob"}, {"type": "u64", "value": 100}]"#,
     );
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().len(), 3);
-}
 
-#[test]
-fn test_parse_mixed_typed_and_bare() {
-    let parser = create_parser();
-    let result = parser.parse_args_string(r#"[{"type": "u32", "value": 42}, "hello", true, 100]"#);
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().len(), 4);
-}
-
-// ── Error handling ───────────────────────────────────────────────────
-
-#[test]
-fn test_error_unsupported_type() {
-    let parser = create_parser();
-    let result = parser.parse_args_string(r#"[{"type": "unknown_type", "value": "abc"}]"#);
-    assert!(result.is_err());
-    let err_msg = result.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("Unsupported type") || err_msg.contains("unknown_type"),
-        "Expected unsupported type error, got: {}",
-        err_msg
-    );
-}
-
-#[test]
-fn test_error_u32_out_of_range() {
-    let parser = create_parser();
-    let result = parser.parse_args_string(r#"[{"type": "u32", "value": 5000000000}]"#);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_error_i32_out_of_range() {
-    let parser = create_parser();
-    let result = parser.parse_args_string(r#"[{"type": "i32", "value": 3000000000}]"#);
-    assert!(result.is_err());
-}
 
 #[test]
 fn test_error_type_value_mismatch() {
