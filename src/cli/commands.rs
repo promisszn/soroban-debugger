@@ -531,6 +531,19 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
             "alerts": storage_diff.triggered_alerts,
         });
 
+        if let Some(ref events) = json_events {
+            output["events"] = serde_json::Value::Array(
+                events
+                    .iter()
+                    .map(|event| {
+                        serde_json::json!({
+                            "contract_id": event.contract_id,
+                            "topics": event.topics,
+                            "data": event.data,
+                        })
+                    })
+                    .collect(),
+            );
         if let Some(events) = json_events {
             output["events"] = EventInspector::to_json_value(&events);
         }
@@ -556,6 +569,141 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
         if let Some(ref ledger) = json_ledger {
             output["ledger_entries"] = ledger.to_json();
         }
+
+        logging::log_display(
+            serde_json::to_string_pretty(&output).map_err(|e| {
+                DebuggerError::FileError(format!("Failed to serialize output: {}", e))
+            })?,
+            logging::LogLevel::Info,
+        );
+    }
+
+    if let Some(trace_path) = &args.trace_output {
+        print_info(format!("\nExporting execution trace to: {:?}", trace_path));
+
+        let args_str = parsed_args.as_ref().map(|a| serde_json::to_string(a).unwrap_or_default());
+        
+        let trace_events = json_events.unwrap_or_else(|| engine.executor().get_events().unwrap_or_default());
+
+        let trace = build_execution_trace(
+            &args.function,
+            args.contract.to_string_lossy().as_ref(),
+            args_str,
+            &storage_after,
+            &result,
+            budget,
+            engine.executor(),
+            &trace_events,
+            usize::MAX,
+        );
+
+        if let Ok(json) = trace.to_json() {
+            if let Err(e) = std::fs::write(trace_path, json) {
+                print_warning(format!("Failed to write trace to {:?}: {}", trace_path, e));
+            } else {
+                print_success(format!("Successfully exported trace to {:?}", trace_path));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn build_execution_trace(
+    function: &str,
+    contract_path: &str,
+    args_str: Option<String>,
+    storage_after: &std::collections::HashMap<String, String>,
+    result: &str,
+    budget: crate::inspector::budget::BudgetInfo,
+    executor: &ContractExecutor,
+    events: &[crate::inspector::events::ContractEvent],
+    replay_until: usize,
+) -> crate::compare::ExecutionTrace {
+    let mut trace_storage = std::collections::BTreeMap::new();
+    for (k, v) in storage_after {
+        if let Ok(val) = serde_json::from_str(v) {
+            trace_storage.insert(k.clone(), val);
+        } else {
+            trace_storage.insert(k.clone(), serde_json::Value::String(v.clone()));
+        }
+    }
+
+    let return_val = serde_json::from_str(result).unwrap_or_else(|_| serde_json::Value::String(result.to_string()));
+
+    let mut call_sequence = Vec::new();
+    let mut depth = 0;
+    
+    call_sequence.push(crate::compare::trace::CallEntry {
+        function: function.to_string(),
+        args: args_str.clone(),
+        depth,
+    });
+
+    if let Ok(diag_events) = executor.get_diagnostic_events() {
+        for event in diag_events {
+            // Stop building trace if we hit the replay limit
+            if call_sequence.len() >= replay_until {
+                break;
+            }
+
+            let event_str = format!("{:?}", event);
+            if event_str.contains("ContractCall") || (event_str.contains("call") && event.contract_id.is_some()) {
+                depth += 1;
+                call_sequence.push(crate::compare::trace::CallEntry {
+                    function: "nested_call".to_string(),
+                    args: None,
+                    depth,
+                });
+            } else if (event_str.contains("ContractReturn") || event_str.contains("return")) && depth > 0 {
+                depth -= 1;
+            }
+        }
+    }
+
+    let mut trace_events = Vec::new();
+    for e in events {
+        trace_events.push(crate::compare::trace::EventEntry {
+            contract_id: e.contract_id.clone(),
+            topics: e.topics.clone(),
+            data: Some(e.data.clone()),
+        });
+    }
+
+    crate::compare::ExecutionTrace {
+        label: Some(format!("Execution of {} on {}", function, contract_path)),
+        contract: Some(contract_path.to_string()),
+        function: Some(function.to_string()),
+        args: args_str,
+        storage: trace_storage,
+        budget: Some(crate::compare::trace::BudgetTrace {
+            cpu_instructions: budget.cpu_instructions,
+            memory_bytes: budget.memory_bytes,
+            cpu_limit: None,
+            memory_limit: None,
+        }),
+        return_value: Some(return_val),
+        call_sequence,
+        events: trace_events,
+    }
+}
+
+/// Execute run command in dry-run mode.
+fn run_dry_run(args: &RunArgs) -> Result<()> {
+    print_info(format!("[DRY RUN] Loading contract: {:?}", args.contract));
+
+    let wasm_file = crate::utils::wasm::load_wasm(&args.contract)
+        .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
+    let wasm_bytes = wasm_file.bytes;
+    let wasm_hash = wasm_file.sha256_hash;
+
+    if let Some(expected) = &args.expected_hash {
+        if expected.to_lowercase() != wasm_hash {
+            return Err(crate::DebuggerError::ChecksumMismatch {
+                expected: expected.clone(),
+                actual: wasm_hash.clone(),
+            }
+            .into());
         if let Some(memory_summary) = json_memory_summary {
             output["memory_summary"] = serde_json::to_value(memory_summary).map_err(|e| {
                 DebuggerError::FileError(format!("Failed to serialize memory summary: {}", e))
@@ -811,6 +959,471 @@ fn format_text_report(report: &CompatibilityReport) -> String {
         }
     }
 
+    Ok(())
+}
+
+/// Parse JSON arguments with validation.
+pub fn parse_args(json: &str) -> Result<String> {
+    let value = serde_json::from_str::<serde_json::Value>(json).map_err(|e| {
+        DebuggerError::InvalidArguments(format!(
+            "Failed to parse JSON arguments: {}. Error: {}",
+            json, e
+        ))
+    })?;
+
+    match value {
+        serde_json::Value::Array(ref arr) => {
+            tracing::debug!(count = arr.len(), "Parsed array arguments");
+        }
+        serde_json::Value::Object(ref obj) => {
+            tracing::debug!(fields = obj.len(), "Parsed object arguments");
+        }
+        _ => {
+            tracing::debug!("Parsed single value argument");
+        }
+    }
+
+    Ok(json.to_string())
+}
+
+/// Parse JSON storage.
+pub fn parse_storage(json: &str) -> Result<String> {
+    serde_json::from_str::<serde_json::Value>(json).map_err(|e| {
+        DebuggerError::StorageError(format!(
+            "Failed to parse JSON storage: {}. Error: {}",
+            json, e
+        ))
+    })?;
+    Ok(json.to_string())
+}
+
+/// Execute the optimize command.
+pub fn optimize(args: OptimizeArgs, _verbosity: Verbosity) -> Result<()> {
+    print_info(format!(
+        "Analyzing contract for gas optimization: {:?}",
+        args.contract
+    ));
+    logging::log_loading_contract(&args.contract.to_string_lossy());
+
+    let wasm_file = crate::utils::wasm::load_wasm(&args.contract)
+        .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
+    let wasm_bytes = wasm_file.bytes;
+    let wasm_hash = wasm_file.sha256_hash;
+
+    if let Some(expected) = &args.expected_hash {
+        if expected.to_lowercase() != wasm_hash {
+            return Err(crate::DebuggerError::ChecksumMismatch {
+                expected: expected.clone(),
+                actual: wasm_hash.clone(),
+            }
+            .into());
+        }
+    }
+
+    print_success(format!(
+        "Contract loaded successfully ({} bytes)",
+        wasm_bytes.len()
+    ));
+
+    if _verbosity == Verbosity::Verbose {
+        print_verbose(format!("SHA-256: {}", wasm_hash));
+        if args.expected_hash.is_some() {
+            print_verbose("Checksum verified ✓");
+        }
+    }
+
+    logging::log_contract_loaded(wasm_bytes.len());
+
+    if let Some(snapshot_path) = &args.network_snapshot {
+        print_info(format!("\nLoading network snapshot: {:?}", snapshot_path));
+        logging::log_loading_snapshot(&snapshot_path.to_string_lossy());
+        let loader = SnapshotLoader::from_file(snapshot_path)?;
+        let loaded_snapshot = loader.apply_to_environment()?;
+        logging::log_display(loaded_snapshot.format_summary(), logging::LogLevel::Info);
+    }
+
+    let functions_to_analyze = if args.function.is_empty() {
+        print_warning("No functions specified, analyzing all exported functions...");
+        crate::utils::wasm::parse_functions(&wasm_bytes)?
+    } else {
+        args.function.clone()
+    };
+
+    let mut executor = ContractExecutor::new(wasm_bytes)?;
+    if let Some(storage_json) = &args.storage {
+        let storage = parse_storage(storage_json)?;
+        executor.set_initial_storage(storage)?;
+    }
+
+    let mut optimizer = crate::profiler::analyzer::GasOptimizer::new(executor);
+
+    print_info(format!(
+        "\nAnalyzing {} function(s)...",
+        functions_to_analyze.len()
+    ));
+    logging::log_analysis_start("gas optimization");
+
+    for function_name in &functions_to_analyze {
+        print_info(format!("  Analyzing function: {}", function_name));
+        match optimizer.analyze_function(function_name, args.args.as_deref()) {
+            Ok(profile) => {
+                logging::log_display(
+                    format!(
+                        "    CPU: {} instructions, Memory: {} bytes, Time: {} ms",
+                        profile.total_cpu, profile.total_memory, profile.wall_time_ms
+                    ),
+                    logging::LogLevel::Info,
+                );
+                print_success(format!(
+                    "    CPU: {} instructions, Memory: {} bytes",
+                    profile.total_cpu, profile.total_memory
+                ));
+            }
+            Err(e) => {
+                print_warning(format!(
+                    "    Warning: Failed to analyze function {}: {}",
+                    function_name, e
+                ));
+                tracing::warn!(function = function_name, error = %e, "Failed to analyze function");
+            }
+        }
+    }
+    logging::log_analysis_complete("gas optimization", functions_to_analyze.len());
+
+    let contract_path_str = args.contract.to_string_lossy().to_string();
+    let report = optimizer.generate_report(&contract_path_str);
+    let markdown = optimizer.generate_markdown_report(&report);
+
+    if let Some(output_path) = &args.output {
+        fs::write(output_path, &markdown).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to write report to {:?}: {}",
+                output_path, e
+            ))
+        })?;
+        print_success(format!(
+            "\nOptimization report written to: {:?}",
+            output_path
+        ));
+        logging::log_optimization_report(&output_path.to_string_lossy());
+    } else {
+        logging::log_display(&markdown, logging::LogLevel::Info);
+    }
+
+    Ok(())
+}
+
+/// ✅ Execute the profile command (hotspots + suggestions)
+pub fn profile(args: ProfileArgs) -> Result<()> {
+    logging::log_display(
+        format!("Profiling contract execution: {:?}", args.contract),
+        logging::LogLevel::Info,
+    );
+
+    let wasm_file = crate::utils::wasm::load_wasm(&args.contract)
+        .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
+    let wasm_bytes = wasm_file.bytes;
+    let wasm_hash = wasm_file.sha256_hash;
+
+    if let Some(expected) = &args.expected_hash {
+        if expected.to_lowercase() != wasm_hash {
+            return Err(crate::DebuggerError::ChecksumMismatch {
+                expected: expected.clone(),
+                actual: wasm_hash.clone(),
+            }
+            .into());
+        }
+    }
+
+    logging::log_display(
+        format!("Contract loaded successfully ({} bytes)", wasm_bytes.len()),
+        logging::LogLevel::Info,
+    );
+
+    // Parse args (optional)
+    let parsed_args = if let Some(args_json) = &args.args {
+        Some(parse_args(args_json)?)
+    } else {
+        None
+    };
+
+    // Create executor
+    let mut executor = ContractExecutor::new(wasm_bytes)?;
+
+    // Initial storage (optional)
+    if let Some(storage_json) = &args.storage {
+        let storage = parse_storage(storage_json)?;
+        executor.set_initial_storage(storage)?;
+    }
+
+    // Analyze exactly one function (this command focuses on execution hotspots)
+    let mut optimizer = crate::profiler::analyzer::GasOptimizer::new(executor);
+
+    logging::log_display(
+        format!("\nRunning function: {}", args.function),
+        logging::LogLevel::Info,
+    );
+    if let Some(ref a) = parsed_args {
+        logging::log_display(format!("Args: {}", a), logging::LogLevel::Info);
+    }
+
+    let _profile = optimizer.analyze_function(&args.function, parsed_args.as_deref())?;
+
+    let contract_path_str = args.contract.to_string_lossy().to_string();
+    let report = optimizer.generate_report(&contract_path_str);
+
+    // Hotspot summary first
+    logging::log_display(
+        format!("\n{}", report.format_hotspots()),
+        logging::LogLevel::Info,
+    );
+
+    // Then detailed suggestions (markdown format)
+    let markdown = optimizer.generate_markdown_report(&report);
+
+    if let Some(output_path) = &args.output {
+        fs::write(output_path, &markdown).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to write report to {:?}: {}",
+                output_path, e
+            ))
+        })?;
+        logging::log_display(
+            format!("\nProfile report written to: {:?}", output_path),
+            logging::LogLevel::Info,
+        );
+    } else {
+        logging::log_display(format!("\n{}", markdown), logging::LogLevel::Info);
+    }
+
+    Ok(())
+}
+
+/// Execute the upgrade-check command.
+/// Execute the upgrade-check command
+pub fn upgrade_check(args: UpgradeCheckArgs, _verbosity: Verbosity) -> Result<()> {
+    print_info("Comparing contracts...");
+    print_info(format!("  Old: {:?}", args.old));
+    print_info(format!("  New: {:?}", args.new));
+    logging::log_contract_comparison(&args.old.to_string_lossy(), &args.new.to_string_lossy());
+
+    let old_bytes = fs::read(&args.old).map_err(|e| {
+        DebuggerError::WasmLoadError(format!(
+            "Failed to read old WASM file at {:?}: {}",
+            args.old, e
+        ))
+    })?;
+    let new_bytes = fs::read(&args.new).map_err(|e| {
+        DebuggerError::WasmLoadError(format!(
+            "Failed to read new WASM file at {:?}: {}",
+            args.new, e
+        ))
+    })?;
+
+    print_success(format!(
+        "Loaded contracts (Old: {} bytes, New: {} bytes)",
+        old_bytes.len(),
+        new_bytes.len()
+    ));
+
+    print_info("Running analysis...");
+    tracing::info!(
+        old_size = old_bytes.len(),
+        new_size = new_bytes.len(),
+        "Loaded contracts for comparison"
+    );
+
+    let analyzer = crate::analyzer::upgrade::UpgradeAnalyzer::new();
+    logging::log_analysis_start("contract upgrade compatibility check");
+    let report = analyzer.analyze(
+        &old_bytes,
+        &new_bytes,
+        args.function.as_deref(),
+        args.args.as_deref(),
+    )?;
+
+    let markdown = analyzer.generate_markdown_report(&report);
+
+    if let Some(output_path) = &args.output {
+        fs::write(output_path, &markdown).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to write report to {:?}: {}",
+                output_path, e
+            ))
+        })?;
+        print_success(format!(
+            "\nCompatibility report written to: {:?}",
+            output_path
+        ));
+        logging::log_optimization_report(&output_path.to_string_lossy());
+    } else {
+        logging::log_display(&markdown, logging::LogLevel::Info);
+    }
+
+    Ok(())
+}
+
+/// Execute the compare command.
+pub fn compare(args: CompareArgs) -> Result<()> {
+    print_info(format!("Loading trace A: {:?}", args.trace_a));
+    let trace_a = crate::compare::ExecutionTrace::from_file(&args.trace_a)?;
+
+    print_info(format!("Loading trace B: {:?}", args.trace_b));
+    let trace_b = crate::compare::ExecutionTrace::from_file(&args.trace_b)?;
+
+    print_info("Comparing traces...");
+    let report = crate::compare::CompareEngine::compare(&trace_a, &trace_b);
+    let rendered = crate::compare::CompareEngine::render_report(&report);
+
+    if let Some(output_path) = &args.output {
+        fs::write(output_path, &rendered).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to write report to {:?}: {}",
+                output_path, e
+            ))
+        })?;
+        print_success(format!("Comparison report written to: {:?}", output_path));
+    } else {
+        logging::log_display(rendered, logging::LogLevel::Info);
+    }
+
+    Ok(())
+}
+
+/// Execute the replay command.
+pub fn replay(args: ReplayArgs, verbosity: Verbosity) -> Result<()> {
+    print_info(format!("Loading trace file: {:?}", args.trace_file));
+    let original_trace = crate::compare::ExecutionTrace::from_file(&args.trace_file)?;
+
+    // Determine which contract to use
+    let contract_path = if let Some(path) = &args.contract {
+        path.clone()
+    } else if let Some(contract_str) = &original_trace.contract {
+        std::path::PathBuf::from(contract_str)
+    } else {
+        return Err(DebuggerError::ExecutionError(
+            "No contract path specified and trace file does not contain contract path".to_string(),
+        )
+        .into());
+    };
+
+    print_info(format!("Loading contract: {:?}", contract_path));
+    let wasm_bytes = fs::read(&contract_path).map_err(|e| {
+        DebuggerError::WasmLoadError(format!(
+            "Failed to read WASM file at {:?}: {}",
+            contract_path, e
+        ))
+    })?;
+
+    print_success(format!(
+        "Contract loaded successfully ({} bytes)",
+        wasm_bytes.len()
+    ));
+
+    // Extract function and args from trace
+    let function = original_trace.function.as_ref().ok_or_else(|| {
+        DebuggerError::ExecutionError("Trace file does not contain function name".to_string())
+    })?;
+
+    let args_str = original_trace.args.as_deref();
+
+    // Determine how many steps to replay
+    let replay_steps = args.replay_until.unwrap_or(usize::MAX);
+    let is_partial_replay = args.replay_until.is_some();
+
+    if is_partial_replay {
+        print_info(format!("Replaying up to step {}", replay_steps));
+    } else {
+        print_info("Replaying full execution");
+    }
+
+    print_info(format!("Function: {}", function));
+    if let Some(a) = args_str {
+        print_info(format!("Arguments: {}", a));
+    }
+
+    // Set up initial storage from trace
+    let initial_storage = if !original_trace.storage.is_empty() {
+        let storage_json = serde_json::to_string(&original_trace.storage).map_err(|e| {
+            DebuggerError::StorageError(format!("Failed to serialize trace storage: {}", e))
+        })?;
+        Some(storage_json)
+    } else {
+        None
+    };
+
+    // Execute the contract
+    print_info("\n--- Replaying Execution ---\n");
+    let mut executor = ContractExecutor::new(wasm_bytes)?;
+
+    if let Some(storage) = initial_storage {
+        executor.set_initial_storage(storage)?;
+    }
+
+    let mut engine = DebuggerEngine::new(executor, vec![]);
+
+    logging::log_execution_start(function, args_str);
+    let replayed_result = engine.execute(function, args_str)?;
+
+    print_success("\n--- Replay Complete ---\n");
+    print_success(format!("Replayed Result: {:?}", replayed_result));
+    logging::log_execution_complete(&replayed_result);
+
+    // Build execution trace from the replay
+    let storage_after = engine.executor().get_storage_snapshot()?;
+    let trace_events = engine.executor().get_events().unwrap_or_default();
+    let budget = crate::inspector::budget::BudgetInspector::get_cpu_usage(engine.executor().host());
+    
+    let replayed_trace = build_execution_trace(
+        function,
+        &contract_path.to_string_lossy(),
+        args_str.map(|s| s.to_string()),
+        &storage_after,
+        &replayed_result,
+        budget,
+        engine.executor(),
+        &trace_events,
+        replay_steps,
+    );
+
+    // Truncate original_trace's call_sequence if needed to match replay_until
+    let mut truncated_original = original_trace.clone();
+    if truncated_original.call_sequence.len() > replay_steps {
+        truncated_original.call_sequence.truncate(replay_steps);
+    }
+
+    // Compare results
+    print_info("\n--- Comparison ---");
+    let report = crate::compare::CompareEngine::compare(&truncated_original, &replayed_trace);
+    let rendered = crate::compare::CompareEngine::render_report(&report);
+
+    if let Some(output_path) = &args.output {
+        std::fs::write(output_path, &rendered).map_err(|e| {
+            DebuggerError::FileError(format!("Failed to write report to {:?}: {}", output_path, e))
+        })?;
+        print_success(format!("\nReplay report written to: {:?}", output_path));
+    } else {
+        logging::log_display(rendered, logging::LogLevel::Info);
+    }
+
+    if verbosity == Verbosity::Verbose {
+        print_verbose("\n--- Call Sequence (Original) ---");
+        for (i, call) in original_trace.call_sequence.iter().enumerate() {
+            let indent = "  ".repeat(call.depth as usize);
+            if let Some(args) = &call.args {
+                print_verbose(format!("{}{}. {} ({})", indent, i, call.function, args));
+            } else {
+                print_verbose(format!("{}{}. {}", indent, i, call.function));
+            }
+
+            if is_partial_replay && i >= replay_steps {
+                print_verbose(format!("{}... (stopped at step {})", indent, replay_steps));
+                break;
+            }
+        }
+    }
+
+    Ok(())
     out.push('\n');
     let old_names: Vec<&str> = report.old_functions.iter().map(|f| f.name.as_str()).collect();
     let new_names: Vec<&str> = report.new_functions.iter().map(|f| f.name.as_str()).collect();

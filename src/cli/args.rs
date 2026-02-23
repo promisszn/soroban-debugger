@@ -324,6 +324,9 @@ pub struct RunArgs {
     #[arg(long, default_value = "1000")]
     pub ttl_warning_threshold: u32,
 
+    /// Export execution trace to JSON file
+    #[arg(long)]
+    pub trace_output: Option<PathBuf>,
     /// Path to file where execution results should be saved
     #[arg(long, value_name = "FILE")]
     pub save_output: Option<PathBuf>,
