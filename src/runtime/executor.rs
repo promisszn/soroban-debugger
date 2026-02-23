@@ -3,9 +3,13 @@ use crate::utils::ArgumentParser;
 use crate::{runtime::mocking::MockCallLogEntry, runtime::mocking::MockContractDispatcher};
 use crate::{DebuggerError, Result};
 
+use indicatif::{ProgressBar, ProgressStyle};
 use soroban_env_host::xdr::ScVal;
 use soroban_env_host::{DiagnosticLevel, Host, TryFromVal};
+use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
+
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
@@ -22,54 +26,34 @@ pub struct ExecutionRecord {
 }
 
 /// Storage snapshot for dry-run rollback.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StorageSnapshot {
-    _contract_address: Address,
+    pub storage: soroban_env_host::storage::Storage,
 }
+
+use crate::debugger::error_db::ErrorDatabase;
 
 /// Executes Soroban contracts in a test environment.
 pub struct ContractExecutor {
-    env: Env,
-    contract_address: Address,
-    last_execution: Option<ExecutionRecord>,
-    mock_registry: Arc<Mutex<MockRegistry>>,
-    wasm_bytes: Vec<u8>,
-    timeout_secs: u64,
-}
-
-impl ContractExecutor {
-    /// Create a new contract executor.
-    pub fn new(wasm: Vec<u8>) -> Result<Self> {
-        info!("Initializing contract executor");
-
-        let env = Env::default();
-        env.host()
-            .set_diagnostic_level(DiagnosticLevel::Debug)
-            .expect("Failed to set diagnostic level");
-
-        let contract_address = env.register(wasm.as_slice(), ());
-
-        Ok(Self {
-            env,
-            contract_address,
-            last_execution: None,
-            mock_registry: Arc::new(Mutex::new(MockRegistry::default())),
-            wasm_bytes: wasm,
-            timeout_secs: 30,
-        })
-    }
-
-    pub fn set_timeout(&mut self, secs: u64) {
-        self.timeout_secs = secs;
-    }
-
-    /// Execute a contract function.
-    pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<String> {
-        info!("Executing function: {}", function);
+ impl ContractExecutor {
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {msg}")
+                .unwrap()
+                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+        );
+        spinner.set_message(format!("Executing function: {}...", function));
+        spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 
         // Validate function existence
-        let exported_functions = crate::utils::wasm::parse_functions(&self.wasm_bytes)?;
+        let exported_functions = match crate::utils::wasm::parse_functions(&self.wasm_bytes) {
+            Ok(funcs) => funcs,
+            Err(e) => {
+                spinner.finish_and_clear();
+                return Err(e);
+            }
+        };
         if !exported_functions.contains(&function.to_string()) {
+            spinner.finish_and_clear();
             return Err(DebuggerError::InvalidFunction(function.to_string()).into());
         }
 
@@ -77,7 +61,13 @@ impl ContractExecutor {
         let func_symbol = Symbol::new(&self.env, function);
 
         let parsed_args = if let Some(args_json) = args {
-            self.parse_args(args_json)?
+            match self.parse_args(function, args_json) {
+                Ok(args) => args,
+                Err(e) => {
+                    spinner.finish_and_clear();
+                    return Err(e);
+                }
+            }
         } else {
             vec![]
         };
@@ -89,163 +79,21 @@ impl ContractExecutor {
         };
 
         // Capture storage before
-        let storage_before = self.get_storage_snapshot()?;
-
-        // Convert args to ScVal for record
-        let sc_args: Vec<ScVal> = parsed_args
-            .iter()
-            .map(|v| ScVal::try_from_val(self.env.host(), v))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| {
-                DebuggerError::ExecutionError(format!(
-                    "Failed to convert arguments to ScVal: {:?}",
-                    e
-                ))
-            })?;
-
-        let (tx, rx) = std::sync::mpsc::channel();
-        if self.timeout_secs > 0 {
-            let timeout_secs = self.timeout_secs;
-            std::thread::spawn(move || {
-                match rx.recv_timeout(std::time::Duration::from_secs(timeout_secs)) {
-                    Ok(_) => {}
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        eprintln!(
-                            "\nError: Contract execution timed out after {} seconds.",
-                            timeout_secs
-                        );
-                        std::process::exit(124);
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
-                }
-            });
-        }
-
-        // Call the contract
-        let invocation_result = self.env.try_invoke_contract::<Val, InvokeError>(
-            &self.contract_address,
-            &func_symbol,
-            args_vec,
-        );
-
-        // Capture storage after
-        let storage_after = self.get_storage_snapshot()?;
-
-        let (display_result, record_result) = match &invocation_result {
-            Ok(Ok(val)) => {
-                info!("Function executed successfully");
-                let sc_val = ScVal::try_from_val(self.env.host(), val).map_err(|e| {
-                    DebuggerError::ExecutionError(format!("Result conversion failed: {:?}", e))
-                })?;
-                (Ok(format!("{:?}", val)), Ok(sc_val))
-            }
-            Ok(Err(conv_err)) => {
-                warn!("Return value conversion failed: {:?}", conv_err);
-                let err_msg = format!("Return value conversion failed: {:?}", conv_err);
-                (
-                    Err(DebuggerError::ExecutionError(err_msg.clone()).into()),
-                    Err(err_msg),
-                )
-            }
-            Err(Ok(inv_err)) => {
-                let err_msg = match inv_err {
-                    InvokeError::Contract(code) => {
-                        warn!("Contract returned error code: {}", code);
-                        format!("The contract returned an error code: {}. This typically indicates a business logic failure (e.g. `panic!` or `require!`).", code)
-                    }
-                    InvokeError::Abort => {
-                        warn!("Contract execution aborted");
-                        "Contract execution was aborted. This could be due to a trap, budget exhaustion, or an explicit abort call.".to_string()
-                    }
-                };
-                (
-                    Err(DebuggerError::ExecutionError(err_msg.clone()).into()),
-                    Err(err_msg),
-                )
-            }
-            Err(Err(inv_err)) => {
-                warn!("Invocation error conversion failed: {:?}", inv_err);
-                let err_msg = format!("Invocation failed with internal error: {:?}", inv_err);
-                (
-                    Err(DebuggerError::ExecutionError(err_msg.clone()).into()),
-                    Err(err_msg),
-                )
+        let storage_before = match self.get_storage_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                spinner.finish_and_clear();
+                return Err(e);
             }
         };
 
-        let _ = tx.send(());
-
-        // Display budget usage and warnings
-        crate::inspector::BudgetInspector::display(self.env.host());
-
-        self.last_execution = Some(ExecutionRecord {
-            function: function.to_string(),
-            args: sc_args,
-            result: record_result,
-            storage_before,
-            storage_after,
-        });
-
-        display_result
-    }
-
-    /// Get the last execution record, if any.
-    pub fn last_execution(&self) -> Option<&ExecutionRecord> {
-        self.last_execution.as_ref()
-    }
-
-    /// Set initial storage state.
-    pub fn set_initial_storage(&mut self, _storage_json: String) -> Result<()> {
-        info!("Setting initial storage (not yet implemented)");
-        Ok(())
-    }
-
-    pub fn set_mock_specs(&mut self, specs: &[String]) -> Result<()> {
-        let registry = MockRegistry::from_cli_specs(&self.env, specs)?;
-        self.set_mock_registry(registry)
-    }
-
-    pub fn set_mock_registry(&mut self, registry: MockRegistry) -> Result<()> {
-        self.mock_registry = Arc::new(Mutex::new(registry));
-        self.install_mock_dispatchers()
-    }
-
-    pub fn get_mock_call_log(&self) -> Vec<MockCallLogEntry> {
-        match self.mock_registry.lock() {
-            Ok(registry) => registry.calls().to_vec(),
-            Err(_) => Vec::new(),
-        }
-    }
-
-    /// Get the host instance.
-    pub fn host(&self) -> &Host {
-        self.env.host()
-    }
-
-    /// Get the authorization tree from the environment.
-    pub fn get_auth_tree(&self) -> Result<Vec<crate::inspector::auth::AuthNode>> {
-        crate::inspector::auth::AuthInspector::get_auth_tree(&self.env)
-    }
-
-    /// Get events captured during execution.
-    pub fn get_events(&self) -> Result<Vec<crate::inspector::events::ContractEvent>> {
-        crate::inspector::events::EventInspector::get_events(self.env.host())
-    }
-
-    /// Capture a snapshot of current contract storage.
-    pub fn get_storage_snapshot(&self) -> Result<HashMap<String, String>> {
-        Ok(crate::inspector::storage::StorageInspector::capture_snapshot(self.env.host()))
-    }
-
-    /// Snapshot current storage state for dry-run rollback.
-    pub fn snapshot_storage(&self) -> Result<StorageSnapshot> {
-        Ok(StorageSnapshot {
-            _contract_address: self.contract_address.clone(),
-        })
-    }
-
-    /// Restore storage state from snapshot (dry-run rollback).
-    pub fn restore_storage(&mut self, _snapshot: &StorageSnapshot) -> Result<()> {
+ impl ContractExecutor {
+                *storage = snapshot.storage.clone();
+                Ok(())
+            })
+            .map_err(|e| {
+                DebuggerError::ExecutionError(format!("Failed to restore storage: {:?}", e))
+            })?;
         info!("Storage state restored (dry-run rollback)");
         Ok(())
     }
@@ -265,11 +113,75 @@ impl ContractExecutor {
             .collect())
     }
 
-    fn parse_args(&self, args_json: &str) -> Result<Vec<Val>> {
+    fn parse_args(&self, function: &str, args_json: &str) -> Result<Vec<Val>> {
         let parser = ArgumentParser::new(self.env.clone());
-        parser.parse_args_string(args_json).map_err(|e| {
-            warn!("Failed to parse arguments: {}", e);
-            DebuggerError::InvalidArguments(e.to_string()).into()
+        let normalized_args_json = self.normalize_args_for_function(function, args_json)?;
+
+        parser
+            .parse_args_string(&normalized_args_json)
+            .map_err(|e| {
+                warn!("Failed to parse arguments: {}", e);
+                DebuggerError::InvalidArguments(e.to_string()).into()
+            })
+    }
+
+    fn normalize_args_for_function(&self, function: &str, args_json: &str) -> Result<String> {
+        let signatures = crate::utils::wasm::parse_function_signatures(&self.wasm_bytes)?;
+        let Some(signature) = signatures.into_iter().find(|sig| sig.name == function) else {
+            return Ok(args_json.to_string());
+        };
+
+        let mut args_value: JsonValue = serde_json::from_str(args_json).map_err(|e| {
+            DebuggerError::InvalidArguments(format!("Invalid JSON in --args: {}", e))
+        })?;
+
+        let JsonValue::Array(args) = &mut args_value else {
+            return Ok(args_json.to_string());
+        };
+
+        for (arg, param) in args.iter_mut().zip(signature.params.iter()) {
+            if param.type_name.starts_with("Option<") {
+                if is_typed_annotation(arg) {
+                    continue;
+                }
+                *arg = serde_json::json!({"type": "option", "value": arg.clone()});
+                continue;
+            }
+
+            if param.type_name.starts_with("Tuple<") {
+                let arity = tuple_arity_from_type_name(&param.type_name).ok_or_else(|| {
+                    DebuggerError::InvalidArguments(format!(
+                        "Invalid tuple type in function spec for '{}': {}",
+                        param.name, param.type_name
+                    ))
+                })?;
+
+                let JsonValue::Array(actual_arr) = arg else {
+                    return Err(DebuggerError::InvalidArguments(format!(
+                        "Argument '{}' expects tuple with {} elements, got {}",
+                        param.name,
+                        arity,
+                        json_type_name(arg)
+                    ))
+                    .into());
+                };
+
+                if actual_arr.len() != arity {
+                    return Err(DebuggerError::InvalidArguments(format!(
+                        "Tuple arity mismatch: expected {}, got {}",
+                        arity,
+                        actual_arr.len()
+                    ))
+                    .into());
+                }
+
+                *arg = serde_json::json!({"type": "tuple", "arity": arity, "value": actual_arr.clone()});
+            }
+        }
+
+        serde_json::to_string(&args_value).map_err(|e| {
+            DebuggerError::ExecutionError(format!("Failed to normalize arguments JSON: {}", e))
+                .into()
         })
     }
 
@@ -313,5 +225,57 @@ impl ContractExecutor {
             ))
             .into()),
         }
+    }
+}
+
+fn tuple_arity_from_type_name(type_name: &str) -> Option<usize> {
+    let inner = type_name.strip_prefix("Tuple<")?.strip_suffix('>')?;
+    if inner.trim().is_empty() {
+        return Some(0);
+    }
+
+    let mut depth = 0usize;
+    let mut arity = 1usize;
+    for ch in inner.chars() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => arity += 1,
+            _ => {}
+        }
+    }
+
+    Some(arity)
+}
+
+fn is_typed_annotation(value: &JsonValue) -> bool {
+    matches!(
+        value,
+        JsonValue::Object(obj) if obj.get("type").is_some() && obj.get("value").is_some()
+    )
+}
+
+fn json_type_name(value: &JsonValue) -> &'static str {
+    match value {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tuple_arity_from_type_name;
+
+    #[test]
+    fn tuple_arity_counts_top_level_types() {
+        assert_eq!(tuple_arity_from_type_name("Tuple<U32, Symbol>"), Some(2));
+        assert_eq!(
+            tuple_arity_from_type_name("Tuple<U32, Option<Vec<Symbol>>, Map<U32, String>>"),
+            Some(3)
+        );
     }
 }
