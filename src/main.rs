@@ -115,7 +115,6 @@ fn print_banner() {
 fn env_var_disables_banner(value: Option<&str>) -> bool {
     value.is_some_and(|v| {
         let trimmed = v.trim();
-     trimmed == "1" || trimmed.eq_ignore_ascii_case("true")
         trimmed == "1" || trimmed.eq_ignore_ascii_case("true")
     })
 }
@@ -144,7 +143,7 @@ fn main() -> miette::Result<()> {
 
     let run_json_output_requested = matches!(
         cli.command.as_ref(),
-        Some(Commands::Run(args)) if args.output == soroban_debugger::cli::args::OutputFormat::Json
+        Some(Commands::Run(args)) if args.output_format == soroban_debugger::cli::args::OutputFormat::Json
     );
     let verbosity = cli.verbosity();
 
@@ -168,10 +167,9 @@ fn main() -> miette::Result<()> {
             soroban_debugger::cli::commands::optimize(args, verbosity)
         }
         Some(Commands::UpgradeCheck(args)) => {
-            soroban_debugger::cli::commands::upgrade_check(args)
+            soroban_debugger::cli::commands::upgrade_check(args, verbosity)
         }
         Some(Commands::Compare(args)) => soroban_debugger::cli::commands::compare(args),
-@@ -195,50 +200,61 @@ fn main() -> miette::Result<()> {
         Some(Commands::Replay(args)) => soroban_debugger::cli::commands::replay(args, verbosity),
         Some(Commands::Completions(args)) => {
             let mut cmd = Cli::command();
@@ -290,5 +288,4 @@ mod tests {
         let args = parse_cli(&["soroban-debug"]);
         assert!(should_show_banner_with(&args, true, None));
     }
-}
 }

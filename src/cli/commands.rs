@@ -52,12 +52,6 @@ fn print_verbose(message: impl AsRef<str>) {
     }
 }
 
-/// Placeholder for dry-run mode
-fn run_dry_run(_args: &RunArgs) -> Result<()> {
-    print_info("Dry-run mode is not yet implemented");
-    Ok(())
-}
-
 /// Placeholder for instruction stepping
 fn run_instruction_stepping(_engine: &mut DebuggerEngine, _function: &str, _args: Option<&str>) -> Result<()> {
     print_info("Instruction stepping is not yet fully implemented");
@@ -532,20 +526,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
         });
 
         if let Some(ref events) = json_events {
-            output["events"] = serde_json::Value::Array(
-                events
-                    .iter()
-                    .map(|event| {
-                        serde_json::json!({
-                            "contract_id": event.contract_id,
-                            "topics": event.topics,
-                            "data": event.data,
-                        })
-                    })
-                    .collect(),
-            );
-        if let Some(events) = json_events {
-            output["events"] = EventInspector::to_json_value(&events);
+            output["events"] = EventInspector::to_json_value(events);
         }
         if let Some(auth_tree) = json_auth {
             output["auth"] = crate::inspector::auth::AuthInspector::to_json_value(&auth_tree);
@@ -570,12 +551,30 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
             output["ledger_entries"] = ledger.to_json();
         }
 
-        logging::log_display(
-            serde_json::to_string_pretty(&output).map_err(|e| {
-                DebuggerError::FileError(format!("Failed to serialize output: {}", e))
-            })?,
-            logging::LogLevel::Info,
-        );
+        if let Some(memory_summary) = json_memory_summary {
+            output["memory_summary"] = serde_json::to_value(memory_summary).map_err(|e| {
+                DebuggerError::FileError(format!("Failed to serialize memory summary: {}", e))
+            })?;
+        }
+
+        let json_output = serde_json::to_string_pretty(&output).map_err(|e| {
+            DebuggerError::FileError(format!("Failed to serialize output: {}", e))
+        })?;
+        logging::log_display(&json_output, logging::LogLevel::Info);
+        output_writer.write(&json_output)?;
+    }
+
+    // Show confirmation message if file was written
+    if let Some(output_path) = &args.save_output {
+        print_success(format!(
+            "\n✓ Output saved to: {}",
+            output_path.display()
+        ));
+    }
+
+    // Display instruction count per function if available
+    if let Some(instr_counts) = get_instruction_counts(&engine) {
+        display_instruction_counts(&instr_counts);
     }
 
     if let Some(trace_path) = &args.trace_output {
@@ -704,31 +703,11 @@ fn run_dry_run(args: &RunArgs) -> Result<()> {
                 actual: wasm_hash.clone(),
             }
             .into());
-        if let Some(memory_summary) = json_memory_summary {
-            output["memory_summary"] = serde_json::to_value(memory_summary).map_err(|e| {
-                DebuggerError::FileError(format!("Failed to serialize memory summary: {}", e))
-            })?;
         }
-
-        let json_output = serde_json::to_string_pretty(&output).map_err(|e| {
-            DebuggerError::FileError(format!("Failed to serialize output: {}", e))
-        })?;
-        logging::log_display(&json_output, logging::LogLevel::Info);
-        output_writer.write(&json_output)?;
     }
 
-    // Show confirmation message if file was written
-    if let Some(output_path) = &args.save_output {
-        print_success(format!(
-            "\n✓ Output saved to: {}",
-            output_path.display()
-        ));
-    }
-
-    // Display instruction count per function if available
-    if let Some(instr_counts) = get_instruction_counts(&engine) {
-        display_instruction_counts(&instr_counts);
-    }
+    print_info(format!("[DRY RUN] WASM hash: {}", wasm_hash));
+    print_info(format!("[DRY RUN] WASM size: {} bytes", wasm_bytes.len()));
 
     Ok(())
 }
@@ -805,162 +784,6 @@ fn display_instruction_counts(counts: &crate::runtime::executor::InstructionCoun
     }
 }
 
-/// Parse JSON arguments into a string for now (will be improved later)
-pub fn parse_args(json: &str) -> Result<String> {
-    // Basic validation
-    serde_json::from_str::<serde_json::Value>(json)
-        .map_err(|e| miette::miette!("Invalid JSON arguments '{}': {}", json, e))?;
-    Ok(json.to_string())
-}
-
-/// Parse JSON storage into a string for now (will be improved later)
-fn parse_storage(json: &str) -> Result<String> {
-    // Basic validation
-    serde_json::from_str::<serde_json::Value>(json)
-        .map_err(|e| miette::miette!("Invalid JSON storage '{}': {}", json, e))?;
-    Ok(json.to_string())
-}
-
-/// Execute the upgrade-check command
-pub fn upgrade_check(args: UpgradeCheckArgs) -> Result<()> {
-    println!("Loading old contract: {:?}", args.old);
-    let old_wasm = fs::read(&args.old)
-        .map_err(|e| miette::miette!("Failed to read old WASM file {:?}: {}", args.old, e))?;
-
-    println!("Loading new contract: {:?}", args.new);
-    let new_wasm = fs::read(&args.new)
-        .map_err(|e| miette::miette!("Failed to read new WASM file {:?}: {}", args.new, e))?;
-
-    // Optionally run test inputs against both versions
-    let execution_diffs = if let Some(inputs_json) = &args.test_inputs {
-        run_test_inputs(inputs_json, &old_wasm, &new_wasm)?
-    } else {
-        Vec::new()
-    };
-
-    let old_path = args.old.to_string_lossy().to_string();
-    let new_path = args.new.to_string_lossy().to_string();
-
-    let report = UpgradeAnalyzer::analyze(&old_wasm, &new_wasm, &old_path, &new_path, execution_diffs)?;
-
-    let output = match args.output.as_str() {
-        "json" => serde_json::to_string_pretty(&report)
-            .map_err(|e| miette::miette!("Failed to serialize report: {}", e))?,
-        _ => format_text_report(&report),
-    };
-
-    if let Some(out_file) = &args.output_file {
-        fs::write(out_file, &output)
-            .map_err(|e| miette::miette!("Failed to write report to {:?}: {}", out_file, e))?;
-        println!("Report written to {:?}", out_file);
-    } else {
-        println!("{}", output);
-    }
-
-    if !report.is_compatible {
-        return Err(miette::miette!("Contracts are not compatible: {} breaking change(s) detected", report.breaking_changes.len()));
-    }
-
-    Ok(())
-}
-
-/// Run test inputs against both WASM versions and collect diffs
-fn run_test_inputs(
-    inputs_json: &str,
-    old_wasm: &[u8],
-    new_wasm: &[u8],
-) -> Result<Vec<ExecutionDiff>> {
-    let inputs: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(inputs_json)
-            .map_err(|e| miette::miette!("Invalid --test-inputs JSON (expected an object mapping function names to arg arrays): {}", e))?;
-
-    let mut diffs = Vec::new();
-
-    for (func_name, args_val) in &inputs {
-        let args_str = args_val.to_string();
-
-        let old_result = invoke_wasm(old_wasm, func_name, &args_str);
-        let new_result = invoke_wasm(new_wasm, func_name, &args_str);
-
-        let outputs_match = old_result == new_result;
-        diffs.push(ExecutionDiff {
-            function: func_name.clone(),
-            args: args_str,
-            old_result,
-            new_result,
-            outputs_match,
-        });
-    }
-
-    Ok(diffs)
-}
-
-/// Invoke a function on a WASM contract and return a string representation of the result
-fn invoke_wasm(wasm: &[u8], function: &str, args: &str) -> String {
-    match ContractExecutor::new(wasm.to_vec()) {
-        Err(e) => format!("Err(executor: {})", e),
-        Ok(executor) => {
-            let mut engine = DebuggerEngine::new(executor, vec![]);
-            let parsed = if args == "null" || args == "[]" {
-                None
-            } else {
-                Some(args.to_string())
-            };
-            match engine.execute(function, parsed.as_deref()) {
-                Ok(val) => format!("Ok({:?})", val),
-                Err(e) => format!("Err({})", e),
-            }
-        }
-    }
-}
-
-/// Format a compatibility report as human-readable text
-fn format_text_report(report: &CompatibilityReport) -> String {
-    let mut out = String::new();
-
-    out.push_str("Contract Upgrade Compatibility Report\n");
-    out.push_str("======================================\n");
-    out.push_str(&format!("Old: {}\n", report.old_wasm_path));
-    out.push_str(&format!("New: {}\n", report.new_wasm_path));
-    out.push('\n');
-
-    let status = if report.is_compatible { "COMPATIBLE" } else { "INCOMPATIBLE" };
-    out.push_str(&format!("Status: {}\n", status));
-
-    out.push('\n');
-    out.push_str(&format!("Breaking Changes ({}):\n", report.breaking_changes.len()));
-    if report.breaking_changes.is_empty() {
-        out.push_str("  (none)\n");
-    } else {
-        for change in &report.breaking_changes {
-            out.push_str(&format!("  {}\n", change));
-        }
-    }
-
-    out.push('\n');
-    out.push_str(&format!("Non-Breaking Changes ({}):\n", report.non_breaking_changes.len()));
-    if report.non_breaking_changes.is_empty() {
-        out.push_str("  (none)\n");
-    } else {
-        for change in &report.non_breaking_changes {
-            out.push_str(&format!("  {}\n", change));
-        }
-    }
-
-    if !report.execution_diffs.is_empty() {
-        out.push('\n');
-        out.push_str(&format!("Execution Diffs ({}):\n", report.execution_diffs.len()));
-        for diff in &report.execution_diffs {
-            let match_str = if diff.outputs_match { "MATCH" } else { "MISMATCH" };
-            out.push_str(&format!(
-                "  {} args={} OLD={} NEW={} [{}]\n",
-                diff.function, diff.args, diff.old_result, diff.new_result, match_str
-            ));
-        }
-    }
-
-    Ok(())
-}
 
 /// Parse JSON arguments with validation.
 pub fn parse_args(json: &str) -> Result<String> {
@@ -1233,18 +1056,28 @@ pub fn upgrade_check(args: UpgradeCheckArgs, _verbosity: Verbosity) -> Result<()
         "Loaded contracts for comparison"
     );
 
-    let analyzer = crate::analyzer::upgrade::UpgradeAnalyzer::new();
     logging::log_analysis_start("contract upgrade compatibility check");
-    let report = analyzer.analyze(
+    let report = crate::analyzer::upgrade::UpgradeAnalyzer::analyze(
         &old_bytes,
         &new_bytes,
-        args.function.as_deref(),
-        args.args.as_deref(),
+        &args.old.to_string_lossy(),
+        &args.new.to_string_lossy(),
+        Vec::new(),
     )?;
 
-    let markdown = analyzer.generate_markdown_report(&report);
+    let status = if report.is_compatible { "COMPATIBLE" } else { "INCOMPATIBLE" };
+    let markdown = format!(
+        "# Upgrade Compatibility Report\n\nOld: {}\nNew: {}\nStatus: {}\n\nBreaking Changes ({}):\n{}\nNon-Breaking Changes ({}):\n{}\n",
+        report.old_wasm_path,
+        report.new_wasm_path,
+        status,
+        report.breaking_changes.len(),
+        if report.breaking_changes.is_empty() { "  (none)".to_string() } else { report.breaking_changes.iter().map(|c| format!("  - {}", c)).collect::<Vec<_>>().join("\n") },
+        report.non_breaking_changes.len(),
+        if report.non_breaking_changes.is_empty() { "  (none)".to_string() } else { report.non_breaking_changes.iter().map(|c| format!("  - {}", c)).collect::<Vec<_>>().join("\n") },
+    );
 
-    if let Some(output_path) = &args.output {
+    if let Some(output_path) = &args.output_file {
         fs::write(output_path, &markdown).map_err(|e| {
             DebuggerError::FileError(format!(
                 "Failed to write report to {:?}: {}",
@@ -1424,13 +1257,6 @@ pub fn replay(args: ReplayArgs, verbosity: Verbosity) -> Result<()> {
     }
 
     Ok(())
-    out.push('\n');
-    let old_names: Vec<&str> = report.old_functions.iter().map(|f| f.name.as_str()).collect();
-    let new_names: Vec<&str> = report.new_functions.iter().map(|f| f.name.as_str()).collect();
-    out.push_str(&format!("Old Functions ({}): {}\n", old_names.len(), old_names.join(", ")));
-    out.push_str(&format!("New Functions ({}): {}\n", new_names.len(), new_names.join(", ")));
-
-    out
 }
 
 /// Start debug server for remote connections
@@ -1483,35 +1309,6 @@ pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// Optimize a WASM contract
-pub fn optimize(args: OptimizeArgs, _verbosity: Verbosity) -> Result<()> {
-    print_info("Optimize mode is not yet implemented in this build");
-    print_info(format!("Contract: {:?}", args.contract));
-    Err(DebuggerError::ExecutionError("Optimize mode not yet implemented".to_string()).into())
-}
-
-/// Compare two execution traces
-pub fn compare(args: CompareArgs) -> Result<()> {
-    print_info("Compare mode is not yet implemented in this build");
-    print_info(format!("Trace A: {:?}", args.trace_a));
-    print_info(format!("Trace B: {:?}", args.trace_b));
-    Err(DebuggerError::ExecutionError("Compare mode not yet implemented".to_string()).into())
-}
-
-/// Replay a recorded execution trace
-pub fn replay(args: ReplayArgs, _verbosity: Verbosity) -> Result<()> {
-    print_info("Replay mode is not yet implemented in this build");
-    print_info(format!("Trace: {:?}", args.trace_file));
-    Err(DebuggerError::ExecutionError("Replay mode not yet implemented".to_string()).into())
-}
-
-/// Profile contract execution
-pub fn profile(args: ProfileArgs) -> Result<()> {
-    print_info("Profile mode is not yet implemented in this build");
-    print_info(format!("Contract: {:?}", args.contract));
-    Err(DebuggerError::ExecutionError("Profile mode not yet implemented".to_string()).into())
 }
 
 /// Run symbolic execution analysis
