@@ -249,6 +249,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub filter_topic: Option<String>,
 
+    /// Filter events by topic pattern (repeatable)
+    #[arg(long, value_name = "PATTERN")]
+    pub event_filter: Vec<String>,
+
     /// Execute the contract call N times for stress testing
     #[arg(long)]
     pub repeat: Option<u32>,

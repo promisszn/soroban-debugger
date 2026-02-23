@@ -121,42 +121,47 @@ impl BatchExecutor {
                 Ok(result) => (result, true, None),
                 Err(e) => (String::new(), false, Some(format!("{:#}", e))),
             },
-@@ -187,94 +206,172 @@ impl BatchExecutor {
-                        crate::logging::LogLevel::Info,
-                    );
-                    if !result.passed {
-                        crate::logging::log_display(
-                            format!(
-                                "  {}",
-                                Formatter::warning("Result does not match expected value")
-                            ),
-                            crate::logging::LogLevel::Warn,
-                        );
-                    }
-                }
-            } else if let Some(error) = &result.error {
-                crate::logging::log_display(
-                    format!("  Error: {}", Formatter::error(error)),
-                    crate::logging::LogLevel::Error,
-                );
-            }
+            Err(e) => (String::new(), false, Some(format!("{:#}", e))),
+        };
 
-            crate::logging::log_display(
-                format!("  Duration: {}ms", result.duration_ms),
-                crate::logging::LogLevel::Info,
-            );
+        let duration = start.elapsed().as_millis();
+
+        let passed = if let Some(expected) = &item.expected {
+            success && result_str == *expected
+        } else {
+            success
+        };
+
+        BatchResult {
+            index,
+            label: item.label.clone(),
+            args: item.args.clone(),
+            result: result_str,
+            success,
+            error,
+            expected: item.expected.clone(),
+            passed,
+            duration_ms: duration,
         }
+    }
 
-        crate::logging::log_display("", crate::logging::LogLevel::Info);
-        crate::logging::log_display("Result Table", crate::logging::LogLevel::Info);
-        crate::logging::log_display(
-            format!(
-                "{:<6} {:<8} {:<22} {:>10} {:<18}",
-                "Index", "Status", "Label", "Time(ms)", "Expected"
-            ),
-            crate::logging::LogLevel::Info,
-        );
-        crate::logging::log_display("-".repeat(80), crate::logging::LogLevel::Info);
+    /// Generate summary from batch results
+    pub fn summarize(results: &[BatchResult]) -> BatchSummary {
+        let total = results.len();
+        let passed = results.iter().filter(|r| r.passed).count();
+        let failed = results.iter().filter(|r| r.success && !r.passed).count();
+        let errors = results.iter().filter(|r| !r.success).count();
+        let total_duration_ms = results.iter().map(|r| r.duration_ms).sum();
+
+        BatchSummary {
+            total,
+            passed,
+            failed,
+            errors,
+            total_duration_ms,
+        }
+    }
+
     /// Display results in a formatted way
     pub fn display_results(results: &[BatchResult], summary: &BatchSummary) {
         use crate::ui::formatter::Formatter;
@@ -179,15 +184,6 @@ impl BatchExecutor {
             let label = result.label.as_deref().unwrap_or(&default_label);
             let expected = result.expected.as_deref().unwrap_or("-");
 
-            crate::logging::log_display(
-                format!(
-                    "{:<6} {:<8} {:<22} {:>10} {:<18}",
-                    result.index,
-                    status,
-                    truncate_for_table(label, 22),
-                    result.duration_ms,
-                    truncate_for_table(expected, 18),
-                ),
             crate::logging::log_display(
                 format!("\n{} {}", status, label),
                 crate::logging::LogLevel::Info,

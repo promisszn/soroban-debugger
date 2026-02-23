@@ -1,5 +1,4 @@
 use crate::analyzer::upgrade::{CompatibilityReport, ExecutionDiff, UpgradeAnalyzer};
-use crate::cli::args::{InspectArgs, InteractiveArgs, RunArgs, UpgradeCheckArgs};
 use crate::cli::args::{
     AnalyzeArgs, CompareArgs, GraphFormat, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs,
     RemoteArgs, ReplArgs, ReplayArgs, RunArgs, ScenarioArgs, ServerArgs, SymbolicArgs, TuiArgs,
@@ -9,7 +8,7 @@ use crate::debugger::engine::DebuggerEngine;
 use crate::debugger::instruction_pointer::StepMode;
 use crate::history::{check_regression, HistoryManager, RunHistory};
 use crate::logging;
-use crate::output::OutputConfig;
+use crate::output::{OutputConfig, OutputWriter};
 use crate::repeat::RepeatRunner;
 use crate::runtime::executor::ContractExecutor;
 use crate::simulator::SnapshotLoader;
@@ -21,7 +20,7 @@ use serde::Serialize;
 use std::fs;
 use std::io::Write;
 use textplots::{Chart, Plot, Shape};
-use crate::inspector::events::{Event, EventInspector};
+use crate::inspector::events::{ContractEvent, EventInspector};
 
 fn print_info(message: impl AsRef<str>) {
     if !Formatter::is_quiet() {
@@ -50,6 +49,48 @@ fn print_result(message: impl AsRef<str>) {
 fn print_verbose(message: impl AsRef<str>) {
     if Formatter::is_verbose() {
         println!("{}", Formatter::info(message));
+    }
+}
+
+/// Placeholder for dry-run mode
+fn run_dry_run(_args: &RunArgs) -> Result<()> {
+    print_info("Dry-run mode is not yet implemented");
+    Ok(())
+}
+
+/// Placeholder for instruction stepping
+fn run_instruction_stepping(_engine: &mut DebuggerEngine, _function: &str, _args: Option<&str>) -> Result<()> {
+    print_info("Instruction stepping is not yet fully implemented");
+    Ok(())
+}
+
+/// Parse step mode from string
+fn parse_step_mode(mode: &str) -> StepMode {
+    match mode.to_lowercase().as_str() {
+        "into" => StepMode::StepInto,
+        "over" => StepMode::StepOver,
+        "out" => StepMode::StepOut,
+        "block" => StepMode::StepBlock,
+        _ => StepMode::StepInto, // Default
+    }
+}
+
+/// Display mock call log
+fn display_mock_call_log(calls: &[crate::runtime::executor::MockCallEntry]) {
+    if calls.is_empty() {
+        return;
+    }
+    print_info("\n--- Mock Contract Calls ---");
+    for (i, entry) in calls.iter().enumerate() {
+        let status = if entry.mocked { "MOCKED" } else { "REAL" };
+        print_info(format!(
+            "{}. {} {} (args: {}) -> {}",
+            i + 1,
+            status,
+            entry.function,
+            entry.args_count,
+            if entry.returned.is_some() { "returned" } else { "pending" }
+        ));
     }
 }
 
@@ -132,7 +173,7 @@ fn run_batch(args: &RunArgs, batch_file: &std::path::Path) -> Result<()> {
 #[tracing::instrument(skip_all, fields(contract = ?args.contract, function = args.function))]
 pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     // Initialize output writer
-    let mut output_writer = OutputWriter::new(args.save_output.as_ref(), args.append)?;
+    let mut output_writer = OutputWriter::new(args.save_output.as_deref(), args.append)?;
 
     // Handle batch execution mode
     if let Some(batch_file) = &args.batch_args {
@@ -244,38 +285,13 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
 
     let mut engine = DebuggerEngine::new(executor, args.breakpoint);
 
+    // Server and remote modes are not yet implemented
     if args.server {
-        let token = args.token.clone().ok_or_else(|| anyhow::anyhow!("Token required for server mode"))?;
-        let server = crate::server::debug_server::DebugServer::new(
-            engine, 
-            token, 
-            args.tls_cert.as_deref(), 
-            args.tls_key.as_deref()
-        )?;
-        
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(server.run(args.port))?;
-        return Ok(());
+        return Err(DebuggerError::ExecutionError("Server mode not yet implemented in run command".to_string()).into());
     }
 
-    if let Some(remote_addr) = args.remote {
-        let token = args.token.clone().ok_or_else(|| anyhow::anyhow!("Token required for remote mode"))?;
-        let rt = tokio::runtime::Runtime::new()?;
-        // Use TLS if either cert or key is provided, or if we want to default to TLS if available.
-        // For client-side, we might just want a flag --use-tls.
-        // Let's assume for now if they provide ANY tls arg or if we want to detect it.
-        let use_tls = args.tls_cert.is_some() || args.tls_key.is_some();
-        let mut client = rt.block_on(crate::client::remote_client::RemoteClient::connect(&remote_addr, token, use_tls))?;
-        
-        println!("\nConnected to remote debugger.");
-        let request = crate::protocol::DebugRequest::Execute {
-            function: args.function.clone(),
-            args: args.args.clone(),
-        };
-        
-        let response = rt.block_on(client.send_request(request))?;
-        println!("Remote Response: {:?}", response);
-        return Ok(());
+    if args.remote.is_some() {
+        return Err(DebuggerError::ExecutionError("Remote mode not yet implemented in run command".to_string()).into());
     }
 
     // Execute locally with debugging
@@ -374,9 +390,9 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
         // Attempt to read raw events from executor
         let raw_events = engine.executor().get_events()?;
 
-        // Convert runtime event objects into our inspector::events::Event via serde translation.
+        // Convert runtime event objects into our inspector::events::ContractEvent via serde translation.
         // This is a generic, safe conversion as long as runtime events are serializable with sensible fields.
-        let converted_events: Vec<Event> = match serde_json::to_value(&raw_events)
+        let converted_events: Vec<ContractEvent> = match serde_json::to_value(&raw_events)
             .and_then(|v| serde_json::from_value(v))
         {
             Ok(evts) => evts,
@@ -384,9 +400,9 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
                 // If conversion fails, fall back to attempting to stringify each raw event for display.
                 print_warning(format!("Failed to convert runtime events for structured display: {}", e));
                 // Fallback: attempt a best-effort stringification
-                let fallback: Vec<Event> = raw_events
+                let fallback: Vec<ContractEvent> = raw_events
                     .into_iter()
-                    .map(|r| Event {
+                    .map(|r| ContractEvent {
                         contract_id: None,
                         topics: vec![],
                         data: format!("{:?}", r),
@@ -569,15 +585,8 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     Ok(())
 }
 
-/// Structure to hold instruction counts per function
-#[derive(Debug, Clone, serde::Serialize)]
-struct InstructionCounts {
-    function_counts: Vec<(String, u64)>,
-    total: u64,
-}
-
 /// Get instruction counts from the debugger engine
-fn get_instruction_counts(engine: &DebuggerEngine) -> Option<InstructionCounts> {
+fn get_instruction_counts(engine: &DebuggerEngine) -> Option<crate::runtime::executor::InstructionCounts> {
     // Try to get instruction counts from the executor
     if let Ok(counts) = engine.executor().get_instruction_counts() {
         Some(counts)
@@ -587,7 +596,7 @@ fn get_instruction_counts(engine: &DebuggerEngine) -> Option<InstructionCounts> 
 }
 
 /// Display instruction counts per function in a formatted table
-fn display_instruction_counts(counts: &InstructionCounts) {
+fn display_instruction_counts(counts: &crate::runtime::executor::InstructionCounts) {
     if counts.function_counts.is_empty() {
         return;
     }
@@ -623,7 +632,7 @@ fn display_instruction_counts(counts: &InstructionCounts) {
 
     // Print header
     let header = format!(
-        "{:<width1$} | {:>width2$} | {:>8$}",
+        "{:<width1$} | {:>width2$} | {:>width3$}",
         "Function",
         "Instructions",
         "Percentage",
@@ -637,22 +646,30 @@ fn display_instruction_counts(counts: &InstructionCounts) {
     // Print rows
     for ((func_name, count), percentage) in counts.function_counts.iter().zip(percentages.iter()) {
         let row = format!(
-            "{:<width1$} | {:>width2$} | {:>7.2$}%",
-            func_name,ons",
+            "{:<width1$} | {:>width2$} | {:>7.2}%",
+            func_name,
             count,
             percentage,
             width1 = max_func_width,
-            width2 = max_count_width,
-            width3 = 8
+            width2 = max_count_width
         );
         print_info(&row);
     }
+}
+
+/// Parse JSON arguments into a string for now (will be improved later)
+pub fn parse_args(json: &str) -> Result<String> {
+    // Basic validation
+    serde_json::from_str::<serde_json::Value>(json)
+        .map_err(|e| miette::miette!("Invalid JSON arguments '{}': {}", json, e))?;
+    Ok(json.to_string())
+}
 
 /// Parse JSON storage into a string for now (will be improved later)
 fn parse_storage(json: &str) -> Result<String> {
     // Basic validation
     serde_json::from_str::<serde_json::Value>(json)
-        .with_context(|| format!("Invalid JSON storage: {}", json))?;
+        .map_err(|e| miette::miette!("Invalid JSON storage '{}': {}", json, e))?;
     Ok(json.to_string())
 }
 
@@ -660,11 +677,11 @@ fn parse_storage(json: &str) -> Result<String> {
 pub fn upgrade_check(args: UpgradeCheckArgs) -> Result<()> {
     println!("Loading old contract: {:?}", args.old);
     let old_wasm = fs::read(&args.old)
-        .with_context(|| format!("Failed to read old WASM file: {:?}", args.old))?;
+        .map_err(|e| miette::miette!("Failed to read old WASM file {:?}: {}", args.old, e))?;
 
     println!("Loading new contract: {:?}", args.new);
     let new_wasm = fs::read(&args.new)
-        .with_context(|| format!("Failed to read new WASM file: {:?}", args.new))?;
+        .map_err(|e| miette::miette!("Failed to read new WASM file {:?}: {}", args.new, e))?;
 
     // Optionally run test inputs against both versions
     let execution_diffs = if let Some(inputs_json) = &args.test_inputs {
@@ -679,20 +696,21 @@ pub fn upgrade_check(args: UpgradeCheckArgs) -> Result<()> {
     let report = UpgradeAnalyzer::analyze(&old_wasm, &new_wasm, &old_path, &new_path, execution_diffs)?;
 
     let output = match args.output.as_str() {
-        "json" => serde_json::to_string_pretty(&report)?,
+        "json" => serde_json::to_string_pretty(&report)
+            .map_err(|e| miette::miette!("Failed to serialize report: {}", e))?,
         _ => format_text_report(&report),
     };
 
     if let Some(out_file) = &args.output_file {
         fs::write(out_file, &output)
-            .with_context(|| format!("Failed to write report to {:?}", out_file))?;
+            .map_err(|e| miette::miette!("Failed to write report to {:?}: {}", out_file, e))?;
         println!("Report written to {:?}", out_file);
     } else {
         println!("{}", output);
     }
 
     if !report.is_compatible {
-        anyhow::bail!("Contracts are not compatible: {} breaking change(s) detected", report.breaking_changes.len());
+        return Err(miette::miette!("Contracts are not compatible: {} breaking change(s) detected", report.breaking_changes.len()));
     }
 
     Ok(())
@@ -705,9 +723,8 @@ fn run_test_inputs(
     new_wasm: &[u8],
 ) -> Result<Vec<ExecutionDiff>> {
     let inputs: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(inputs_json).with_context(|| {
-            "Invalid --test-inputs JSON: expected an object mapping function names to arg arrays"
-        })?;
+        serde_json::from_str(inputs_json)
+            .map_err(|e| miette::miette!("Invalid --test-inputs JSON (expected an object mapping function names to arg arrays): {}", e))?;
 
     let mut diffs = Vec::new();
 
@@ -802,74 +819,124 @@ fn format_text_report(report: &CompatibilityReport) -> String {
 
     out
 }
-    print_info(&"-".repeat(header.len()));
-    let total_row = format!(
-        "{:<width1$} | {:>width2$}",
-        "TOTAL",
-        counts.total,
-        width1 = max_func_width,
-        width2 = max_count_width
-    );
-    print_info(&total_row);
-}
 
 /// Start debug server for remote connections
 pub fn server(args: ServerArgs) -> Result<()> {
-    use crate::server::DebugServer;
-
-    print_info(format!("Starting debug server on port {}", args.port));
-    
+    print_info("Remote debugging server is not yet implemented in this build");
+    print_info(format!("Requested port: {}", args.port));
     if args.token.is_some() {
-        print_info("Token authentication enabled");
-    } else {
-        print_warning("No authentication token specified - server will accept all connections");
+        print_info("Token authentication would be enabled");
     }
-
-    if args.tls_cert.is_some() && args.tls_key.is_some() {
-        print_info("TLS enabled");
-    }
-
-    let mut server = DebugServer::new(args.port, args.token);
-    
-    if let (Some(cert), Some(key)) = (args.tls_cert, args.tls_key) {
-        server = server.with_tls(cert, key);
-    }
-
-    print_success(format!("Debug server listening on 0.0.0.0:{}", args.port));
-    print_info("Waiting for client connections...");
-    print_info("Press Ctrl+C to stop the server");
-    
-    server.start()
+    Err(DebuggerError::ExecutionError("Server mode not yet implemented".to_string()).into())
 }
 
 /// Connect to remote debug server
 pub fn remote(args: RemoteArgs, _verbosity: Verbosity) -> Result<()> {
-    use crate::client::RemoteClient;
+    print_info("Remote debugging client is not yet implemented in this build");
+    print_info(format!("Requested connection to: {}", args.remote));
+    Err(DebuggerError::ExecutionError("Remote mode not yet implemented".to_string()).into())
+}
+/// Launch interactive debugger UI
+pub fn interactive(args: InteractiveArgs, _verbosity: Verbosity) -> Result<()> {
+    print_info("Interactive mode is not yet implemented in this build");
+    print_info(format!("Contract: {:?}", args.contract));
+    Err(DebuggerError::ExecutionError("Interactive mode not yet implemented".to_string()).into())
+}
 
-    print_info(format!("Connecting to remote server at {}", args.remote));
-    
-    let mut client = RemoteClient::connect(&args.remote, args.token)?;
-    
-    print_success("Connected to remote debug server");
-    
-    // If contract is specified, load it
-    if let Some(contract_path) = args.contract {
-        print_info(format!("Loading contract: {:?}", contract_path));
-        let size = client.load_contract(&contract_path.to_string_lossy())?;
-        print_success(format!("Contract loaded ({} bytes)", size));
+/// Launch TUI debugger
+pub fn tui(args: TuiArgs, _verbosity: Verbosity) -> Result<()> {
+    print_info("TUI mode is not yet implemented in this build");
+    print_info(format!("Contract: {:?}", args.contract));
+    Err(DebuggerError::ExecutionError("TUI mode not yet implemented".to_string()).into())
+}
+
+/// Inspect a WASM contract
+pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
+    let bytes = fs::read(&args.contract)
+        .map_err(|e| miette::miette!("Failed to read contract {:?}: {}", args.contract, e))?;
+    let info = crate::utils::wasm::get_module_info(&bytes)?;
+    println!("Contract: {:?}", args.contract);
+    println!("Size: {} bytes", info.total_size);
+    println!("Types: {}", info.type_count);
+    println!("Functions: {}", info.function_count);
+    println!("Exports: {}", info.export_count);
+    if args.functions {
+        let sigs = crate::utils::wasm::parse_function_signatures(&bytes)?;
+        println!("Exported functions:");
+        for sig in &sigs {
+            let params: Vec<String> = sig.params.iter().map(|p| format!("{}: {}", p.name, p.type_name)).collect();
+            let ret = sig.return_type.as_deref().unwrap_or("()");
+            println!("  {}({}) -> {}", sig.name, params.join(", "), ret);
+        }
     }
-    
-    // If function is specified, execute it
-    if let Some(function) = args.function {
-        print_info(format!("Executing function: {}", function));
-        let result = client.execute(&function, args.args.as_deref())?;
-        print_result(format!("Result: {}", result));
-    } else {
-        // Interactive mode - ping the server
-        client.ping()?;
-        print_info("Server is responsive");
-        print_info("Use --function to execute a contract function");
-    }
-    
     Ok(())
+}
+
+/// Optimize a WASM contract
+pub fn optimize(args: OptimizeArgs, _verbosity: Verbosity) -> Result<()> {
+    print_info("Optimize mode is not yet implemented in this build");
+    print_info(format!("Contract: {:?}", args.contract));
+    Err(DebuggerError::ExecutionError("Optimize mode not yet implemented".to_string()).into())
+}
+
+/// Compare two execution traces
+pub fn compare(args: CompareArgs) -> Result<()> {
+    print_info("Compare mode is not yet implemented in this build");
+    print_info(format!("Trace A: {:?}", args.trace_a));
+    print_info(format!("Trace B: {:?}", args.trace_b));
+    Err(DebuggerError::ExecutionError("Compare mode not yet implemented".to_string()).into())
+}
+
+/// Replay a recorded execution trace
+pub fn replay(args: ReplayArgs, _verbosity: Verbosity) -> Result<()> {
+    print_info("Replay mode is not yet implemented in this build");
+    print_info(format!("Trace: {:?}", args.trace_file));
+    Err(DebuggerError::ExecutionError("Replay mode not yet implemented".to_string()).into())
+}
+
+/// Profile contract execution
+pub fn profile(args: ProfileArgs) -> Result<()> {
+    print_info("Profile mode is not yet implemented in this build");
+    print_info(format!("Contract: {:?}", args.contract));
+    Err(DebuggerError::ExecutionError("Profile mode not yet implemented".to_string()).into())
+}
+
+/// Run symbolic execution analysis
+pub fn symbolic(args: SymbolicArgs, _verbosity: Verbosity) -> Result<()> {
+    print_info("Symbolic mode is not yet implemented in this build");
+    print_info(format!("Contract: {:?}", args.contract));
+    Err(DebuggerError::ExecutionError("Symbolic mode not yet implemented".to_string()).into())
+}
+
+/// Analyze a contract
+pub fn analyze(args: AnalyzeArgs, _verbosity: Verbosity) -> Result<()> {
+    print_info("Analyze mode is not yet implemented in this build");
+    print_info(format!("Contract: {:?}", args.contract));
+    Err(DebuggerError::ExecutionError("Analyze mode not yet implemented".to_string()).into())
+}
+
+/// Run a scenario
+pub fn scenario(args: ScenarioArgs, _verbosity: Verbosity) -> Result<()> {
+    print_info("Scenario mode is not yet implemented in this build");
+    print_info(format!("Scenario: {:?}", args.scenario));
+    Err(DebuggerError::ExecutionError("Scenario mode not yet implemented".to_string()).into())
+}
+
+/// Launch the REPL
+pub async fn repl(args: ReplArgs) -> Result<()> {
+    print_info("REPL mode is not yet implemented in this build");
+    print_info(format!("Contract: {:?}", args.contract));
+    Err(DebuggerError::ExecutionError("REPL mode not yet implemented".to_string()).into())
+}
+
+/// Show budget trend chart
+pub fn show_budget_trend(contract: Option<&str>, function: Option<&str>) -> Result<()> {
+    print_info("Budget trend is not yet implemented in this build");
+    if let Some(c) = contract {
+        print_info(format!("Contract: {}", c));
+    }
+    if let Some(f) = function {
+        print_info(format!("Function: {}", f));
+    }
+    Err(DebuggerError::ExecutionError("Budget trend not yet implemented".to_string()).into())
 }

@@ -32,11 +32,20 @@ pub struct StorageSnapshot {
     pub storage: soroban_env_host::storage::Storage,
 }
 
+/// Re-export for convenience
+pub use crate::runtime::mocking::MockCallLogEntry as MockCallEntry;
+
+/// Structure to hold instruction counts per function
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InstructionCounts {
+    pub function_counts: Vec<(String, u64)>,
+    pub total: u64,
+}
+
 use crate::debugger::error_db::ErrorDatabase;
 
 /// Executes Soroban contracts in a test environment.
 pub struct ContractExecutor {
- impl ContractExecutor {
     env: Env,
     contract_address: Address,
     last_execution: Option<ExecutionRecord>,
@@ -175,7 +184,6 @@ impl ContractExecutor {
 
         let parsed_args = if let Some(args_json) = args {
             match self.parse_args(function, args_json) {
-            match self.parse_args(args_json) {
                 Ok(args) => args,
                 Err(e) => {
                     spinner.finish_and_clear();
@@ -305,7 +313,6 @@ impl ContractExecutor {
         };
         memory_tracker.record_snapshot(self.env.host(), "execute:result_convert");
 
- impl ContractExecutor {
         let _ = tx.send(());
 
         // Display budget usage and warnings
@@ -356,6 +363,15 @@ impl ContractExecutor {
             Ok(registry) => registry.calls().to_vec(),
             Err(_) => Vec::new(),
         }
+    }
+
+    /// Get instruction counts per function (stub - not yet implemented)
+    pub fn get_instruction_counts(&self) -> Result<InstructionCounts> {
+        // Placeholder implementation - instruction counting not yet implemented
+        Ok(InstructionCounts {
+            function_counts: Vec::new(),
+            total: 0,
+        })
     }
 
     /// Get the host instance.
