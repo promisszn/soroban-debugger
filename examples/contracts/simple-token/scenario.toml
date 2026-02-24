@@ -1,0 +1,35 @@
+# Simple Token Integration Test Scenario
+# This scenario tests the complete lifecycle of a token contract
+
+[[steps]]
+name = "Initialize Token"
+function = "initialize"
+args = '["GD5DJ3B6A2KHSXLYJZ3IGR7Q5UMVJ5J4GQTKTQYQDQXJQJ5YQZQKQZQ", "My Token", "MTK"]'
+expected_return = "()"
+
+[[steps]]
+name = "Mint Tokens to User"
+function = "mint"
+args = '["GD726E62Z6XU6KD5J2EPOHG5NQZ5K5I5J5QZQZQZQZQZQZQZQZQZQZQ", 1000]'
+expected_return = "()"
+
+[[steps]]
+name = "Check User Balance"
+function = "balance"
+args = '["GD726E62Z6XU6KD5J2EPOHG5NQZ5K5I5J5QZQZQZQZQZQZQZQZQZQZQ"]'
+expected_return = "1000"
+
+[[steps]]
+name = "Transfer Tokens"
+function = "transfer"
+args = '["GD726E62Z6XU6KD5J2EPOHG5NQZ5K5I5J5QZQZQZQZQZQZQZQZQZQZQ", "GD826E62Z6XU6KD5J2EPOHG5NQZ5K5I5J5QZQZQZQZQZQZQZQZQZQZQ", 300]'
+expected_return = "()"
+
+[[steps]]
+name = "Verify Final State"
+function = "balance"
+args = '["GD726E62Z6XU6KD5J2EPOHG5NQZ5K5I5J5QZQZQZQZQZQZQZQZQZQZQ"]'
+expected_return = "700"
+
+[steps.expected_storage]
+"TotalSupply" = "1000"
