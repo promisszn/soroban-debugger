@@ -9,7 +9,7 @@ The Soroban Debugger supports remote debugging, allowing you to debug smart cont
 The remote debugging feature consists of three main components:
 
 1. **Debug Server** - Runs on the remote system, hosts the contract execution environment
-2. **Remote Client** - Connects from your local machine to issue debug commands  
+2. **Remote Client** - Connects from your local machine to issue debug commands
 3. **Wire Protocol** - JSON-over-TCP communication protocol for debug operations
 
 ## Quick Start
@@ -72,7 +72,7 @@ Token-based authentication prevents unauthorized access:
 # Server with token
 soroban-debug server --port 9229 --token "your-secret-token-here"
 
-# Client provides matching token  
+# Client provides matching token
 soroban-debug remote --remote host:9229 --token "your-secret-token-here"
 ```
 
@@ -103,7 +103,7 @@ The debug protocol uses JSON messages over TCP with line-delimited encoding.
 ```json
 {
   "id": 1,
-  "request": { ... } 
+  "request": { ... }
 }
 ```
 
@@ -280,7 +280,7 @@ Multiple developers can connect to the same debug server:
 # Team member starts server
 soroban-debug server --port 9229 --token team-debug-session
 
-# Other team members connect  
+# Other team members connect
 soroban-debug remote --remote team-lead-ip:9229 --token team-debug-session
 ```
 
@@ -321,7 +321,7 @@ telnet host 9229
 - Check for whitespace in token strings
 - Ensure token was properly set when starting server
 
-### TLS Handshake Errors  
+### TLS Handshake Errors
 - Verify certificate and key paths are correct
 - Check certificate hasn't expired
 - Ensure client trusts the certificate (or use self-signed for testing)

@@ -1,8 +1,8 @@
-import { 
-  DebugSession, 
-  InitializedEvent, 
-  BreakpointEvent, 
-  StoppedEvent, 
+import {
+  DebugSession,
+  InitializedEvent,
+  BreakpointEvent,
+  StoppedEvent,
   ExitedEvent,
   LogOutputEvent,
   EventEmitter
@@ -77,7 +77,7 @@ export class SorobanDebugSession extends DebugSession {
     const source = args.source.path || args.source.name || '';
     const breakpoints = args.breakpoints || [];
 
-    this.state.breakpoints.set(source, 
+    this.state.breakpoints.set(source,
       breakpoints.map((bp, idx) => ({
         source,
         line: bp.line,
@@ -221,9 +221,9 @@ export class SorobanDebugSession extends DebugSession {
 
     const stdout = this.debuggerProcess.getOutputStream();
     if (stdout) {
-      this.rl = readline.createInterface({ 
+      this.rl = readline.createInterface({
         input: stdout,
-        crlfDelay: Infinity 
+        crlfDelay: Infinity
       });
 
       this.rl.on('line', (line: string) => {

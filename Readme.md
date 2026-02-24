@@ -575,10 +575,10 @@ show_events = true
 
 The CLI supports **screen-reader compatible** and **low-complexity** output so that all information is conveyed via text, not only color or Unicode symbols.
 
-- **`NO_COLOR`**  
+- **`NO_COLOR`**
   If the `NO_COLOR` environment variable is set and not empty, the debugger disables all ANSI color output. Status is then shown with text labels (e.g. `[PASS]`, `[FAIL]`, `[INFO]`, `[WARN]`) instead of colored text.
 
-- **`--no-unicode`**  
+- **`--no-unicode`**
   Use ASCII-only output: no Unicode box-drawing characters (e.g. `┌`, `─`, `│`) or symbols. Box-drawing is replaced with `+`, `-`, `|`; bullets and arrows use `*` and `>`. Spinners are replaced with static text such as `[WORKING...]`.
 
 **Example (screen reader friendly):**

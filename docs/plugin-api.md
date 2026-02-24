@@ -640,7 +640,7 @@ impl InspectorPlugin for JsonFormatter {
 The plugin API follows semantic versioning:
 
 - **Major version changes**: Breaking API changes
-- **Minor version changes**: New features, backward compatible  
+- **Minor version changes**: New features, backward compatible
 - **Patch version changes**: Bug fixes, backward compatible
 
 Check `min_debugger_version` in your manifest to specify the minimum required debugger version.

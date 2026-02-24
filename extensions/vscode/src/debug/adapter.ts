@@ -4,7 +4,7 @@ import { SorobanDebugSession } from '../dap/adapter';
 
 export class SorobanDebugAdapterDescriptorFactory
   implements vscode.DebugAdapterDescriptorFactory, vscode.Disposable {
-  
+
   private context: vscode.ExtensionContext;
   private session: SorobanDebugSession | null = null;
 

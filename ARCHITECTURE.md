@@ -19,7 +19,7 @@ The project is structured into several core modules, each with dedicated respons
 
 ### 2. `debugger`
 - **Responsibility**: The heart of the debugger. Orchestrates the debugging session.
-- **Key Components**: 
+- **Key Components**:
   - `DebuggerEngine`: Coordinates between the executor, breakpoint manager, and debug state.
   - `BreakpointManager`: Manages set breakpoints and evaluates if execution should pause.
   - `DebugState`: Maintains the current state of the debugging session (e.g., current function, pause status).
@@ -27,7 +27,7 @@ The project is structured into several core modules, each with dedicated respons
 
 ### 3. `runtime`
 - **Responsibility**: Manages the execution environment for Soroban contracts.
-- **Key Components**: 
+- **Key Components**:
   - `ContractExecutor`: Uses `soroban-env-host` to register and invoke contracts in a test environment.
 - **Function**: Executes WASM bytecode and provides access to the underlying `Host` for inspection.
 
