@@ -4,6 +4,9 @@
 
 A command-line debugger for Soroban smart contracts on the Stellar network. Debug your contracts interactively with breakpoints, step-through execution, state inspection, and budget tracking.
 
+Check out the [FAQ](docs/faq.md) for help with common issues.
+
+
 ## Features
 
 - Step-through execution of Soroban contracts
@@ -680,6 +683,7 @@ at your option.
 
 ## Resources
 
+- [FAQ](docs/faq.md) - Common problems and workarounds
 - Soroban Documentation: https://soroban.stellar.org/docs
 - Stellar Developer Discord: https://discord.gg/stellardev
 - Issue Tracker: https://github.com/Timi16/soroban-debugger/issues
