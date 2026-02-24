@@ -681,24 +681,7 @@ Benchmarks are run automatically in CI to ensure performance stays within accept
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit issues and pull requests.
-
-### Development Setup
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `cargo test`
-5. Submit a pull request
-
-### Code Style
-
-This project follows standard Rust formatting:
-
-```bash
-cargo fmt
-cargo clippy
-```
+Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, workflow, code style, and PR guidelines.
 
 <!-- ## Roadmap
 
