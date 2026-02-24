@@ -5,7 +5,7 @@
 
 A command-line debugger for Soroban smart contracts on the Stellar network. Debug your contracts interactively with breakpoints, step-through execution, state inspection, and budget tracking.
 
-Check out the [FAQ](docs/faq.md) for help with common issues.
+Check out the [Getting Started Guide](docs/getting-started.md) to begin debugging in under 10 minutes, or see the [FAQ](docs/faq.md) for help with common issues.
 
 
 ## Features
