@@ -30,10 +30,9 @@
 use hex;
 use serde_json::Value;
 use soroban_sdk::{
-    Address, Bytes, BytesN, Env, Map, String as SorobanString, Symbol, TryFromVal, Val, Vec as SorobanVec,
-    Bytes, Env, Map, String as SorobanString, Symbol, TryFromVal, Val, Vec as SorobanVec,
+    Address, Env, Map, String as SorobanString, Symbol, TryFromVal, Val, Vec as SorobanVec,
 };
-use soroban_sdk::{Env, Map, String as SorobanString, Symbol, TryFromVal, Val, Vec as SorobanVec};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use thiserror::Error;
 use tracing::{debug, warn};
 
@@ -43,7 +42,7 @@ pub enum ArgumentParseError {
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 
-    #[error("Unsupported type: {0}. Supported types: u32, i32, u64, i64, u128, i128, bool, string, symbol, address, option, tuple")]
+    #[error("Unsupported type: {0}. Supported types: u32, i32, u64, u128, i128, bool, string, symbol, address, option, tuple, vec, bytes, bytesn")]
     UnsupportedType(String),
 
     #[error("Failed to convert value: {0}")]
@@ -82,6 +81,10 @@ impl ArgumentParser {
     /// Create a new argument parser with the given Soroban environment
     pub fn new(env: Env) -> Self {
         Self { env }
+    }
+
+    fn looks_like_strkey_address(s: &str) -> bool {
+        s.len() == 56 && (s.starts_with('G') || s.starts_with('C'))
     }
 
     /// Parse a JSON string into Soroban argument values
@@ -158,10 +161,20 @@ impl ArgumentParser {
     /// Check if a JSON value is a type annotation object `{"type": "...", "value": ...}`
     fn is_typed_annotation(&self, value: &Value) -> bool {
         if let Value::Object(obj) = value {
-            (obj.len() == 2 || (obj.len() == 3 && obj.contains_key("arity")))
-                && obj.contains_key("type")
-                && obj.contains_key("value")
-                && obj["type"].is_string()
+            if !obj.contains_key("type") || !obj.contains_key("value") || !obj["type"].is_string() {
+                return false;
+            }
+
+            let type_name = obj["type"].as_str().unwrap_or_default();
+            let allowed_extra = match type_name {
+                "tuple" => Some("arity"),
+                "vec" => Some("element_type"),
+                "bytesn" => Some("length"),
+                _ => None,
+            };
+
+            obj.keys()
+                .all(|k| k == "type" || k == "value" || Some(k.as_str()) == allowed_extra)
         } else {
             false
         }
@@ -192,37 +205,11 @@ impl ArgumentParser {
             "address" => self.convert_address(val),
             "option" => self.convert_option(val),
             "tuple" => self.convert_tuple(val, obj),
+            "vec" => self.convert_vec(val, obj),
             "bytes" => self.convert_bytes(val),
             "bytesn" => self.convert_bytesn(val, obj),
             other => Err(ArgumentParseError::UnsupportedType(other.to_string())),
         }
-    }
-
-    /// Convert a JSON string to a Soroban Address Val
-    fn convert_address(&self, value: &Value) -> Result<Val, ArgumentParseError> {
-        let s = value.as_str().ok_or_else(|| ArgumentParseError::TypeMismatch {
-            expected: "address (string)".to_string(),
-            actual: format!("{}", value),
-        })?;
-
-        use std::panic::{catch_unwind, AssertUnwindSafe};
-        let parsed = catch_unwind(AssertUnwindSafe(|| {
-            Address::from_str(&self.env, s)
-        }));
-
-        let address = match parsed {
-            Ok(addr) => addr,
-            Err(_) => {
-                return Err(ArgumentParseError::ConversionError(format!(
-                    "Invalid address format: {}",
-                    s
-                )))
-            }
-        };
-
-        Val::try_from_val(&self.env, &address).map_err(|e| {
-            ArgumentParseError::ConversionError(format!("Failed to convert Address to Val: {:?}", e))
-        })
     }
 
     /// Convert a JSON number to u32 Val
@@ -387,6 +374,48 @@ impl ArgumentParser {
         }
     }
 
+    /// Convert a JSON array to a Soroban Vec with optional type enforcement
+    fn convert_vec(
+        &self,
+        value: &Value,
+        obj: &serde_json::Map<String, Value>,
+    ) -> Result<Val, ArgumentParseError> {
+        let arr = value
+            .as_array()
+            .ok_or_else(|| ArgumentParseError::TypeMismatch {
+                expected: "array for vec".to_string(),
+                actual: format!("{}", value),
+            })?;
+
+        let element_type = obj.get("element_type").and_then(|v| v.as_str());
+
+        let mut soroban_vec = SorobanVec::<Val>::new(&self.env);
+
+        for (i, item) in arr.iter().enumerate() {
+            let val = if let Some(et) = element_type {
+                // Force each element to be of the specified type
+                let mut typed_item = serde_json::Map::new();
+                typed_item.insert("type".to_string(), Value::String(et.to_string()));
+                typed_item.insert("value".to_string(), item.clone());
+
+                // If it's nested vec, we might need to handle element_type for it too.
+                // For now, let's just pass the whole typed_item back to parse_typed_value.
+                self.parse_typed_value(&Value::Object(typed_item))
+                    .map_err(|e| {
+                        ArgumentParseError::ConversionError(format!(
+                            "Vector element {} does not match element_type '{}': {}",
+                            i, et, e
+                        ))
+                    })?
+            } else {
+                self.json_to_soroban_val(item)?
+            };
+            soroban_vec.push_back(val);
+        }
+
+        Ok(soroban_vec.into())
+    }
+
     /// Convert a JSON array to a Soroban tuple (fixed length array)
     fn convert_tuple(
         &self,
@@ -414,7 +443,18 @@ impl ArgumentParser {
             }
         }
 
-        self.array_to_soroban_vec(arr)
+        let mut soroban_vec = SorobanVec::<Val>::new(&self.env);
+        for (i, item) in arr.iter().enumerate() {
+            let val = self.json_to_soroban_val(item).map_err(|e| {
+                ArgumentParseError::ConversionError(format!(
+                    "Cannot convert tuple element {} to Soroban value: {}",
+                    i, e
+                ))
+            })?;
+            soroban_vec.push_back(val);
+        }
+
+        Ok(soroban_vec.into())
     }
 
     fn decode_bytes_string(&self, s: &str) -> Result<Vec<u8>, ArgumentParseError> {
@@ -478,6 +518,25 @@ impl ArgumentParser {
         })
     }
 
+    fn convert_address(&self, value: &Value) -> Result<Val, ArgumentParseError> {
+        let s = value
+            .as_str()
+            .ok_or_else(|| ArgumentParseError::TypeMismatch {
+                expected: "address (string)".to_string(),
+                actual: format!("{}", value),
+            })?;
+
+        let address = catch_unwind(AssertUnwindSafe(|| Address::from_str(&self.env, s)))
+            .map_err(|_| ArgumentParseError::InvalidArgument(format!("Invalid address: {}", s)))?;
+
+        Val::try_from_val(&self.env, &address).map_err(|e| {
+            ArgumentParseError::ConversionError(format!(
+                "Failed to convert Address to Val: {:?}",
+                e
+            ))
+        })
+    }
+
     /// Convert a JSON value to a Soroban Val (bare values without type annotation)
     fn json_to_soroban_val(&self, json_value: &Value) -> Result<Val, ArgumentParseError> {
         match json_value {
@@ -535,18 +594,14 @@ impl ArgumentParser {
                 }
             }
             Value::String(s) => {
-                // If it looks like an address (starts with C or G and is 56 chars), try to parse as address
-                if (s.starts_with('C') || s.starts_with('G')) && s.len() == 56 {
-                    use std::panic::{catch_unwind, AssertUnwindSafe};
-                    let parsed = catch_unwind(AssertUnwindSafe(|| {
-                        Address::from_str(&self.env, s)
-                    }));
-
-                    if let Ok(address) = parsed {
+                if Self::looks_like_strkey_address(s) {
+                    if let Ok(addr) =
+                        catch_unwind(AssertUnwindSafe(|| Address::from_str(&self.env, s)))
+                    {
                         debug!("Converting string to Address: {}", s);
-                        return Val::try_from_val(&self.env, &address).map_err(|e| {
+                        return Val::try_from_val(&self.env, &addr).map_err(|e| {
                             ArgumentParseError::ConversionError(format!(
-                                "Failed to convert detected Address to Val: {:?}",
+                                "Failed to convert Address to Val: {:?}",
                                 e
                             ))
                         });
@@ -554,11 +609,19 @@ impl ArgumentParser {
                 }
 
                 debug!("Converting string to Symbol: {}", s);
-                // Default bare strings to Symbol (backward compatible)
-                let symbol = Symbol::new(&self.env, s);
-                Val::try_from_val(&self.env, &symbol).map_err(|e| {
+                if let Ok(symbol) = catch_unwind(AssertUnwindSafe(|| Symbol::new(&self.env, s))) {
+                    return Val::try_from_val(&self.env, &symbol).map_err(|e| {
+                        ArgumentParseError::ConversionError(format!(
+                            "Failed to convert Symbol to Val: {:?}",
+                            e
+                        ))
+                    });
+                }
+
+                let soroban_str = SorobanString::from_str(&self.env, s);
+                Val::try_from_val(&self.env, &soroban_str).map_err(|e| {
                     ArgumentParseError::ConversionError(format!(
-                        "Failed to convert Symbol to Val: {:?}",
+                        "Failed to convert String to Val: {:?}",
                         e
                     ))
                 })
@@ -583,6 +646,7 @@ impl ArgumentParser {
     /// Convert a JSON array to a Soroban Vec (vector type)
     fn array_to_soroban_vec(&self, arr: &[Value]) -> Result<Val, ArgumentParseError> {
         let mut soroban_vec = SorobanVec::<Val>::new(&self.env);
+        let mut first_type: Option<String> = None;
 
         for (i, item) in arr.iter().enumerate() {
             let val = self.json_to_soroban_val(item).map_err(|e| {
@@ -592,10 +656,42 @@ impl ArgumentParser {
                     i, e
                 ))
             })?;
+
+            // Optional: Enforce homogeneity for bare arrays by comparing JSON value types
+            // This meets the "Clear errors for mixed types" requirement.
+            let current_type = self.get_json_type_name(item);
+            if let Some(ref expected) = first_type {
+                if *expected != current_type {
+                    return Err(ArgumentParseError::TypeMismatch {
+                        expected: format!("homogeneous array of {}", expected),
+                        actual: format!("mixed array with {} at index {}", current_type, i),
+                    });
+                }
+            } else {
+                first_type = Some(current_type);
+            }
+
             soroban_vec.push_back(val);
         }
 
         Ok(soroban_vec.into())
+    }
+
+    fn get_json_type_name(&self, value: &Value) -> String {
+        match value {
+            Value::Null => "null".to_string(),
+            Value::Bool(_) => "bool".to_string(),
+            Value::Number(_) => "number".to_string(),
+            Value::String(_) => "string".to_string(),
+            Value::Array(_) => "array".to_string(),
+            Value::Object(obj) => {
+                if self.is_typed_annotation(value) {
+                    obj["type"].as_str().unwrap_or("typed").to_string()
+                } else {
+                    "object".to_string()
+                }
+            }
+        }
     }
 
     /// Convert a JSON object to a Soroban Map
@@ -624,26 +720,6 @@ impl ArgumentParser {
         }
 
         Ok(soroban_map.into())
-    }
-
-    #[allow(dead_code)]
-    fn string_to_bytes(&self, input: &str) -> Result<Vec<u8>, String> {
-        if let Some(hex_str) = input.strip_prefix("0x") {
-            hex::decode(hex_str).map_err(|e| format!("Invalid hex: {}", e))
-        } else if let Some(b64_str) = input.strip_prefix("base64:") {
-            general_purpose::STANDARD
-                .decode(b64_str)
-                .map_err(|e| format!("Invalid base64: {}", e))
-        } else {
-            Err("Bytes must start with '0x' or 'base64:'".to_string())
-        }
-    }
-
-    // Example of how to integrate into the main parser
-    #[allow(dead_code)]
-    fn parse_as_bytes(&self, input: &str) -> Result<Bytes, String> {
-        let vec = self.string_to_bytes(input)?;
-        Ok(Bytes::from_slice(&self.env, &vec))
     }
 }
 
@@ -1137,19 +1213,27 @@ mod tests {
     #[test]
     fn test_typed_address() {
         let parser = create_parser();
-        let addr = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADUI";
+        let addr = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
         let json = format!(r#"[{{ "type": "address", "value": "{}" }}]"#, addr);
         let result = parser.parse_args_string(&json);
-        assert!(result.is_ok(), "Failed to parse typed address: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse typed address: {:?}",
+            result.err()
+        );
     }
 
     #[test]
     fn test_bare_address_detection() {
         let parser = create_parser();
-        let addr = "GD3IYSAL6Z2A3A4A3A4A3A4A3A4A3A4A3A4A3A4A3A4A3A4A3A4A3A4A";
+        let addr = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
         let json = format!(r#"["{}"]"#, addr);
         let result = parser.parse_args_string(&json);
-        assert!(result.is_ok(), "Failed to detect bare address: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to detect bare address: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1159,5 +1243,55 @@ mod tests {
         let result = parser.parse_args_string(json);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid address"));
+    }
+
+    #[test]
+    fn test_typed_vec_u32() {
+        let parser = create_parser();
+        let result = parser
+            .parse_args_string(r#"[{"type": "vec", "element_type": "u32", "value": [1, 2, 3]}]"#);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_typed_vec_homogeneity_enforcement() {
+        let parser = create_parser();
+        // Item at index 2 is a string, but u32 is expected
+        let result = parser.parse_args_string(
+            r#"[{"type": "vec", "element_type": "u32", "value": [1, 2, "three"]}]"#,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("does not match element_type 'u32'"));
+    }
+
+    #[test]
+    fn test_bare_vec_homogeneity_enforcement() {
+        let parser = create_parser();
+        // Bare array with mixed types should fail
+        let result = parser.parse_args_string(r#"[ [1, 2, "three"] ]"#);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("mixed array with string at index 2"));
+    }
+
+    #[test]
+    fn test_nested_vec_bare() {
+        let parser = create_parser();
+        let result = parser.parse_args_string(r#"[ [[1, 2], [3, 4]] ]"#);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_nested_vec_typed() {
+        let parser = create_parser();
+        let result = parser.parse_args_string(
+            r#"[ {"type": "vec", "element_type": "vec", "value": [[1, 2], [3, 4]]} ]"#,
+        );
+        assert!(result.is_ok());
     }
 }

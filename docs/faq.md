@@ -16,7 +16,7 @@ This page covers common questions, confusing behaviors, and troubleshooting tips
 
 ### 1. `cargo install` fails with "linker 'cc' not found"
 **Cause:** Your system lacks the necessary build tools (C compiler and linker) required to compile Rust dependencies.
-**Fix:** 
+**Fix:**
 - **Windows:** Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and select the "Desktop development with C++" workload.
 - **Linux:** Install `build-essential` (Ubuntu/Debian) or `base-devel` (Arch).
 - **macOS:** Run `xcode-select --install`.

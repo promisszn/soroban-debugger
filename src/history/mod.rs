@@ -1,4 +1,4 @@
-use anyhow::{Context, Result as AnyhowResult};
+use crate::{DebuggerError, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};
@@ -19,13 +19,20 @@ pub struct HistoryManager {
 
 impl HistoryManager {
     /// Create a new HistoryManager using the default `~/.soroban-debug/history.json` path.
-    pub fn new() -> AnyhowResult<Self> {
+    pub fn new() -> Result<Self> {
         let home_dir = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
-            .context("Could not determine home directory")?;
+            .map_err(|_| {
+                DebuggerError::FileError("Could not determine home directory".to_string())
+            })?;
         let debug_dir = PathBuf::from(home_dir).join(".soroban-debug");
         if !debug_dir.exists() {
-            fs::create_dir_all(&debug_dir)?;
+            fs::create_dir_all(&debug_dir).map_err(|e| {
+                DebuggerError::FileError(format!(
+                    "Failed to create debug directory {:?}: {}",
+                    debug_dir, e
+                ))
+            })?;
         }
         Ok(Self {
             file_path: debug_dir.join("history.json"),
@@ -38,11 +45,16 @@ impl HistoryManager {
     }
 
     /// Read historical data using highly optimized BufReader.
-    pub fn load_history(&self) -> AnyhowResult<Vec<RunHistory>> {
+    pub fn load_history(&self) -> Result<Vec<RunHistory>> {
         if !self.file_path.exists() {
             return Ok(Vec::new());
         }
-        let file = File::open(&self.file_path)?;
+        let file = File::open(&self.file_path).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to open history file {:?}: {}",
+                self.file_path, e
+            ))
+        })?;
         let reader = BufReader::new(file);
         let history: Vec<RunHistory> =
             serde_json::from_reader(reader).unwrap_or_else(|_| Vec::new());
@@ -50,12 +62,22 @@ impl HistoryManager {
     }
 
     /// Append a new record optimizing with BufWriter.
-    pub fn append_record(&self, record: RunHistory) -> AnyhowResult<()> {
+    pub fn append_record(&self, record: RunHistory) -> Result<()> {
         let mut history = self.load_history()?;
         history.push(record);
-        let file = File::create(&self.file_path)?;
+        let file = File::create(&self.file_path).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to create history file {:?}: {}",
+                self.file_path, e
+            ))
+        })?;
         let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, &history)?;
+        serde_json::to_writer_pretty(writer, &history).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to write history file {:?}: {}",
+                self.file_path, e
+            ))
+        })?;
         Ok(())
     }
 
@@ -64,7 +86,7 @@ impl HistoryManager {
         &self,
         contract_hash: Option<&str>,
         function: Option<&str>,
-    ) -> AnyhowResult<Vec<RunHistory>> {
+    ) -> Result<Vec<RunHistory>> {
         let history = self.load_history()?;
         let filtered = history
             .into_iter()

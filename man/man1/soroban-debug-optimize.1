@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH soroban-debug-optimize 1  "soroban-debug-optimize " 
+.TH optimize 1  "optimize " 
 .SH NAME
-soroban\-debug\-optimize \- Analyze contract and generate gas optimization suggestions
+optimize \- Analyze contract and generate gas optimization suggestions
 .SH SYNOPSIS
-\fBsoroban\-debug\-optimize\fR <\fB\-c\fR|\fB\-\-contract\fR> [\fB\-f\fR|\fB\-\-function\fR] [\fB\-a\fR|\fB\-\-args\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-s\fR|\fB\-\-storage\fR] [\fB\-\-network\-snapshot\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBoptimize\fR <\fB\-c\fR|\fB\-\-contract\fR> [\fB\-f\fR|\fB\-\-function\fR] [\fB\-a\fR|\fB\-\-args\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-s\fR|\fB\-\-storage\fR] [\fB\-\-network\-snapshot\fR] [\fB\-\-expected\-hash\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Analyze contract and generate gas optimization suggestions
 .SH OPTIONS
@@ -26,6 +26,9 @@ Initial storage state as JSON object
 .TP
 \fB\-\-network\-snapshot\fR \fI<NETWORK_SNAPSHOT>\fR
 Network snapshot file to load before analysis
+.TP
+\fB\-\-expected\-hash\fR \fI<EXPECTED_HASH>\fR
+Expected SHA\-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

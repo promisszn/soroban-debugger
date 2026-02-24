@@ -1,5 +1,5 @@
 use crate::runtime::executor::ContractExecutor;
-use crate::Result;
+use crate::{DebuggerError, Result};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::fmt::Write;
@@ -44,7 +44,7 @@ impl SymbolicAnalyzer {
 
         for args_json in combinations.iter().take(100) {
             let executor_res = std::panic::catch_unwind(|| {
-                if let Ok(executor) = ContractExecutor::new(wasm.to_vec()) {
+                if let Ok(mut executor) = ContractExecutor::new(wasm.to_vec()) {
                     executor.execute(function, Some(args_json))
                 } else {
                     Err(crate::DebuggerError::ExecutionError("Init fail".into()).into())
@@ -96,10 +96,17 @@ impl SymbolicAnalyzer {
         let mut exports = Vec::new();
 
         for payload in parser.parse_all(wasm) {
-            match payload? {
+            match payload
+                .map_err(|e| DebuggerError::WasmLoadError(format!("Failed to parse WASM: {}", e)))?
+            {
                 Payload::TypeSection(reader) => {
                     for rec_group in reader {
-                        let rec_group = rec_group?;
+                        let rec_group = rec_group.map_err(|e| {
+                            DebuggerError::WasmLoadError(format!(
+                                "Failed to read type section: {}",
+                                e
+                            ))
+                        })?;
                         for ty in rec_group.types() {
                             if let wasmparser::CompositeType::Func(func_type) = &ty.composite_type {
                                 type_definitions.push(func_type.clone());
@@ -109,12 +116,22 @@ impl SymbolicAnalyzer {
                 }
                 Payload::FunctionSection(reader) => {
                     for type_idx in reader {
-                        function_types.push(type_idx?);
+                        function_types.push(type_idx.map_err(|e| {
+                            DebuggerError::WasmLoadError(format!(
+                                "Failed to read function section: {}",
+                                e
+                            ))
+                        })?);
                     }
                 }
                 Payload::ExportSection(reader) => {
                     for export in reader {
-                        let export = export?;
+                        let export = export.map_err(|e| {
+                            DebuggerError::WasmLoadError(format!(
+                                "Failed to read export section: {}",
+                                e
+                            ))
+                        })?;
                         if let wasmparser::ExternalKind::Func = export.kind {
                             exports.push((export.name.to_string(), export.index));
                         }
@@ -134,7 +151,10 @@ impl SymbolicAnalyzer {
             }
         }
 
-        anyhow::bail!("Function not found in exports");
+        Err(
+            DebuggerError::InvalidFunction(format!("Function '{}' not found in exports", target))
+                .into(),
+        )
     }
 
     fn generate_input_combinations(&self, arg_count: usize) -> Vec<String> {

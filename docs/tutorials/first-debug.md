@@ -11,7 +11,7 @@ This tutorial will take you from zero to successfully debugging a Soroban smart 
 
 ## 1. Installing the Debugger
 
-To step through Soroban WebAssembly (WASM) execution, you need the Soroban debugger. 
+To step through Soroban WebAssembly (WASM) execution, you need the Soroban debugger.
 
 Install it via Cargo by running the following command in your terminal:
 
@@ -32,7 +32,7 @@ soroban-debugger 1.0.0
 
 ## 2. Creating a Small Contract
 
-Let's create a simple counter contract to debug. 
+Let's create a simple counter contract to debug.
 
 First, initialize a new Soroban project:
 
@@ -57,10 +57,10 @@ impl CounterContract {
     pub fn increment(env: Env) -> u32 {
         // Breakpoint target 1
         let mut count: u32 = env.storage().instance().get(&COUNTER).unwrap_or(0);
-        
+
         // Breakpoint target 2
         count += 1;
-        
+
         env.storage().instance().set(&COUNTER, &count);
         count
     }
@@ -99,7 +99,7 @@ soroban-debugger target/wasm32-unknown-unknown/release/hello_world.wasm
 ```text
 Loading WASM module...
 Debug symbols loaded successfully.
-(soroban-debug) 
+(soroban-debug)
 ```
 
 You are now in the interactive debugging prompt. Type `help` to see all available basic debugger commands (`run`, `step`, `next`, `break`, `print`, `storage`).
@@ -192,7 +192,7 @@ Type `continue` (or `c`) to let the function finish executing.
 
 *Expected Output:*
 ```text
-Execution completed. 
+Execution completed.
 Return value: U32(1)
 ```
 
@@ -213,7 +213,7 @@ Return value: U32(1)
 ## Implementation Notes
 
 * **WASM DWARF:** This debugger relies on DWARF debugging data embedded inside custom sections of the WebAssembly binary. Stripping your WASM for mainnet deployment using tools like `wasm-opt` will remove these sections. Always debug against unstripped development builds.
-* **Host Environment:** The debugger runs a mock Soroban environment. State does not persist between `soroban-debugger` CLI sessions unless you export the ledger state to a JSON file. 
+* **Host Environment:** The debugger runs a mock Soroban environment. State does not persist between `soroban-debugger` CLI sessions unless you export the ledger state to a JSON file.
 
 ---
 *Return to the [Docs Index](../../README.md) for more tutorials.*

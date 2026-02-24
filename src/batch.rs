@@ -1,8 +1,9 @@
 use crate::runtime::executor::ContractExecutor;
+use crate::DebuggerError;
 use crate::Result;
-use anyhow::Context;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fs;
 use std::path::Path;
 use std::time::Instant;
@@ -18,6 +19,19 @@ pub struct BatchItem {
     /// Optional label for this test case
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum BatchItemInput {
+    Structured {
+        args: Value,
+        #[serde(default)]
+        expected: Option<Value>,
+        #[serde(default)]
+        label: Option<String>,
+    },
+    RawArgs(Value),
 }
 
 /// Result of a single batch execution
@@ -61,15 +75,26 @@ impl BatchExecutor {
 
     /// Load batch items from a JSON file
     pub fn load_batch_file<P: AsRef<Path>>(path: P) -> Result<Vec<BatchItem>> {
-        let content = fs::read_to_string(path.as_ref())
-            .with_context(|| format!("Failed to read batch file: {:?}", path.as_ref()))?;
-
-        let items: Vec<BatchItem> = serde_json::from_str(&content).with_context(|| {
-            format!(
-                "Failed to parse batch file as JSON array: {:?}",
-                path.as_ref()
-            )
+        let content = fs::read_to_string(path.as_ref()).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to read batch file {:?}: {}",
+                path.as_ref(),
+                e
+            ))
         })?;
+
+        let parsed: Vec<BatchItemInput> = serde_json::from_str(&content).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to parse batch file as JSON array {:?}: {}",
+                path.as_ref(),
+                e
+            ))
+        })?;
+
+        let items = parsed
+            .into_iter()
+            .map(BatchItem::from)
+            .collect::<Vec<BatchItem>>();
 
         Ok(items)
     }
@@ -92,21 +117,17 @@ impl BatchExecutor {
         let executor_result = ContractExecutor::new(self.wasm_bytes.clone());
 
         let (result_str, success, error) = match executor_result {
-            Ok(executor) => match executor.execute(&self.function, Some(&item.args)) {
+            Ok(mut executor) => match executor.execute(&self.function, Some(&item.args)) {
                 Ok(result) => (result, true, None),
                 Err(e) => (String::new(), false, Some(format!("{:#}", e))),
             },
-            Err(e) => (
-                String::new(),
-                false,
-                Some(format!("Failed to create executor: {:#}", e)),
-            ),
+            Err(e) => (String::new(), false, Some(format!("{:#}", e))),
         };
 
-        let duration_ms = start.elapsed().as_millis();
+        let duration = start.elapsed().as_millis();
 
         let passed = if let Some(expected) = &item.expected {
-            success && result_str.trim() == expected.trim()
+            success && result_str == *expected
         } else {
             success
         };
@@ -120,15 +141,15 @@ impl BatchExecutor {
             error,
             expected: item.expected.clone(),
             passed,
-            duration_ms,
+            duration_ms: duration,
         }
     }
 
-    /// Generate summary from results
+    /// Generate summary from batch results
     pub fn summarize(results: &[BatchResult]) -> BatchSummary {
         let total = results.len();
         let passed = results.iter().filter(|r| r.passed).count();
-        let failed = results.iter().filter(|r| !r.passed && r.success).count();
+        let failed = results.iter().filter(|r| r.success && !r.passed).count();
         let errors = results.iter().filter(|r| !r.success).count();
         let total_duration_ms = results.iter().map(|r| r.duration_ms).sum();
 
@@ -145,68 +166,148 @@ impl BatchExecutor {
     pub fn display_results(results: &[BatchResult], summary: &BatchSummary) {
         use crate::ui::formatter::Formatter;
 
-        println!("\n{}", "=".repeat(80));
-        println!("  Batch Execution Results");
-        println!("{}", "=".repeat(80));
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=".repeat(80), crate::logging::LogLevel::Info);
+        crate::logging::log_display("  Batch Execution Results", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=".repeat(80), crate::logging::LogLevel::Info);
 
         for result in results {
             let status = if result.passed {
-                Formatter::success("✓ PASS")
+                "PASS"
             } else if result.success {
-                Formatter::warning("✗ FAIL")
+                "FAIL"
             } else {
-                Formatter::error("✗ ERROR")
+                "ERROR"
             };
 
             let default_label = format!("Test #{}", result.index);
             let label = result.label.as_deref().unwrap_or(&default_label);
-            println!("\n{} {}", status, label);
-            println!("  Args: {}", result.args);
+            crate::logging::log_display(
+                format!("\n{} {}", status, label),
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display(
+                format!("  Args: {}", result.args),
+                crate::logging::LogLevel::Info,
+            );
 
             if result.success {
-                println!("  Result: {}", result.result);
+                crate::logging::log_display(
+                    format!("  Result: {}", result.result),
+                    crate::logging::LogLevel::Info,
+                );
                 if let Some(expected) = &result.expected {
-                    println!("  Expected: {}", expected);
+                    crate::logging::log_display(
+                        format!("  Expected: {}", expected),
+                        crate::logging::LogLevel::Info,
+                    );
                     if !result.passed {
-                        println!(
-                            "  {}",
-                            Formatter::warning("Result does not match expected value")
+                        crate::logging::log_display(
+                            format!(
+                                "  {}",
+                                Formatter::warning("Result does not match expected value")
+                            ),
+                            crate::logging::LogLevel::Warn,
                         );
                     }
                 }
             } else if let Some(error) = &result.error {
-                println!("  Error: {}", Formatter::error(error));
+                crate::logging::log_display(
+                    format!("  Error: {}", Formatter::error(error)),
+                    crate::logging::LogLevel::Error,
+                );
             }
 
-            println!("  Duration: {}ms", result.duration_ms);
+            crate::logging::log_display(
+                format!("  Duration: {}ms", result.duration_ms),
+                crate::logging::LogLevel::Info,
+            );
         }
 
-        println!("\n{}", "=".repeat(80));
-        println!("  Summary");
-        println!("{}", "=".repeat(80));
-        println!("  Total:    {}", summary.total);
-        println!(
-            "  {}",
-            Formatter::success(format!("Passed:   {}", summary.passed))
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=".repeat(80), crate::logging::LogLevel::Info);
+        crate::logging::log_display("  Summary", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=".repeat(80), crate::logging::LogLevel::Info);
+        crate::logging::log_display(
+            format!("  Total:    {}", summary.total),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!(
+                "  {}",
+                Formatter::success(format!("Passed:   {}", summary.passed))
+            ),
+            crate::logging::LogLevel::Info,
         );
 
         if summary.failed > 0 {
-            println!(
-                "  {}",
-                Formatter::warning(format!("Failed:   {}", summary.failed))
+            crate::logging::log_display(
+                format!(
+                    "  {}",
+                    Formatter::warning(format!("Failed:   {}", summary.failed))
+                ),
+                crate::logging::LogLevel::Warn,
             );
         }
 
         if summary.errors > 0 {
-            println!(
-                "  {}",
-                Formatter::error(format!("Errors:   {}", summary.errors))
+            crate::logging::log_display(
+                format!(
+                    "  {}",
+                    Formatter::error(format!("Errors:   {}", summary.errors))
+                ),
+                crate::logging::LogLevel::Error,
             );
         }
 
-        println!("  Duration: {}ms", summary.total_duration_ms);
-        println!("{}", "=".repeat(80));
+        crate::logging::log_display(
+            format!("  Duration: {}ms", summary.total_duration_ms),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display("=".repeat(80), crate::logging::LogLevel::Info);
     }
+}
+
+impl From<BatchItemInput> for BatchItem {
+    fn from(value: BatchItemInput) -> Self {
+        match value {
+            BatchItemInput::RawArgs(args) => Self {
+                args: json_value_to_text(args),
+                expected: None,
+                label: None,
+            },
+            BatchItemInput::Structured {
+                args,
+                expected,
+                label,
+            } => Self {
+                args: json_value_to_text(args),
+                expected: expected.map(json_value_to_text),
+                label,
+            },
+        }
+    }
+}
+
+fn json_value_to_text(value: Value) -> String {
+    match value {
+        Value::String(s) => s,
+        other => other.to_string(),
+    }
+}
+
+#[allow(dead_code)]
+fn truncate_for_table(value: &str, limit: usize) -> String {
+    if value.chars().count() <= limit {
+        return value.to_string();
+    }
+
+    let mut truncated = value
+        .chars()
+        .take(limit.saturating_sub(1))
+        .collect::<String>();
+    truncated.push('…');
+    truncated
 }
 
 #[cfg(test)]
@@ -233,17 +334,6 @@ mod tests {
     fn test_batch_summary() {
         let results = vec![
             BatchResult {
-                index: 0,
-                label: None,
-                args: "[]".to_string(),
-                result: "ok".to_string(),
-                success: true,
-                error: None,
-                expected: None,
-                passed: true,
-                duration_ms: 10,
-            },
-            BatchResult {
                 index: 1,
                 label: None,
                 args: "[]".to_string(),
@@ -253,6 +343,17 @@ mod tests {
                 expected: Some("ok".to_string()),
                 passed: false,
                 duration_ms: 15,
+            },
+            BatchResult {
+                index: 2,
+                label: None,
+                args: "[]".to_string(),
+                result: "ok".to_string(),
+                success: true,
+                error: None,
+                expected: Some("ok".to_string()),
+                passed: true,
+                duration_ms: 10,
             },
         ];
 

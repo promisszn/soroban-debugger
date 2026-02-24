@@ -1,0 +1,28 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH remote 1  "remote " 
+.SH NAME
+remote \- Connect to remote debug server
+.SH SYNOPSIS
+\fBremote\fR <\fB\-r\fR|\fB\-\-remote\fR> [\fB\-t\fR|\fB\-\-token\fR] [\fB\-c\fR|\fB\-\-contract\fR] [\fB\-f\fR|\fB\-\-function\fR] [\fB\-a\fR|\fB\-\-args\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Connect to remote debug server
+.SH OPTIONS
+.TP
+\fB\-r\fR, \fB\-\-remote\fR \fI<REMOTE>\fR
+Remote server address (e.g., localhost:9229)
+.TP
+\fB\-t\fR, \fB\-\-token\fR \fI<TOKEN>\fR
+Authentication token (if required by server)
+.TP
+\fB\-c\fR, \fB\-\-contract\fR \fI<CONTRACT>\fR
+Path to the contract WASM file
+.TP
+\fB\-f\fR, \fB\-\-function\fR \fI<FUNCTION>\fR
+Function name to execute
+.TP
+\fB\-a\fR, \fB\-\-args\fR \fI<ARGS>\fR
+Function arguments as JSON array
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

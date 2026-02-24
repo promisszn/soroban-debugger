@@ -1,10 +1,11 @@
 # Soroban Debugger
 
 [![CI](https://github.com/Timi16/soroban-debugger/actions/workflows/ci.yml/badge.svg)](https://github.com/Timi16/soroban-debugger/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/Timi16/soroban-debugger?logo=github)](https://github.com/Timi16/soroban-debugger/releases)
 
 A command-line debugger for Soroban smart contracts on the Stellar network. Debug your contracts interactively with breakpoints, step-through execution, state inspection, and budget tracking.
 
-Check out the [FAQ](docs/faq.md) for help with common issues.
+Check out the [Getting Started Guide](docs/getting-started.md) to begin debugging in under 10 minutes, or see the [FAQ](docs/faq.md) for help with common issues.
 
 
 ## Features
@@ -67,6 +68,33 @@ soroban-debug run --contract token.wasm --function transfer --args '["Alice", "B
 soroban-debug run --contract token.wasm --function update --args '{"user":"Alice","balance":1000}'
 ```
 
+### Complex Argument Types
+
+The debugger supports passing complex nested structures like vectors and maps using JSON.
+
+#### Bare Values (Default Inference)
+- **Numbers**: Default to `i128`
+- **Strings**: Default to `Symbol` (if <= 32 chars and valid) or `String`
+- **Arrays**: Converted to `Vec<Val>`. Elements must be of the same JSON type (homogeneity check).
+- **Objects**: Converted to `Map<Symbol, Val>`.
+
+Example of nested arrays:
+```bash
+soroban-debug run --contract my_contract.wasm --function my_func --args '[[[1, 2], [3, 4]], [[5, 6], [7, 8]]]'
+```
+
+#### Typed Annotations
+For explicit control over types, use the typed annotation format `{"type": "...", "value": ...}`:
+
+| Type     | Example                                  |
+|----------|------------------------------------------|
+| `u32`    | `{"type": "u32", "value": 42}`           |
+| `i128`   | `{"type": "i128", "value": -100}`        |
+| `symbol` | `{"type": "symbol", "value": "hello"}`   |
+| `vec`    | `{"type": "vec", "element_type": "u32", "value": [1, 2, 3]}` |
+
+Typed vectors allow enforcing a specific Soroban type for all elements.
+
 ### Interactive Mode
 
 Start an interactive debugging session:
@@ -100,9 +128,27 @@ Options:
   -s, --storage <JSON>      Initial storage state as JSON
   -b, --breakpoint <NAME>   Set breakpoint at function name
       --storage-filter <PATTERN>  Filter storage by key pattern (repeatable)
-      --batch-args <FILE>   Path to JSON file with array of argument sets for batch execution
-      --watch               Watch the WASM file for changes and automatically re-run
+  --batch-args <FILE>   Path to JSON file with array of argument sets for batch execution
+  --watch               Watch the WASM file for changes and automatically re-run
 ```
+
+### Automatic Test Generation
+
+Automatically generate a valid Rust unit test file that reproduces the exact execution — capturing inputs, expected outputs, and storage state assertions — so you receive free, ready-to-run regression tests directly from your debug sessions.
+
+```bash
+soroban-debug run \
+  --contract token.wasm \
+  --function transfer \
+  --args '["Alice", "Bob", 100]' \
+  --generate-test tests/reproc_test.rs
+```
+
+Generated tests are self-contained and use the Soroban test SDK.
+
+Options:
+  --generate-test <FILE>  Write generated test to the specified file
+  --overwrite             Overwrite the test file if it already exists (default: append)
 
 ### Watch Mode
 
@@ -260,7 +306,10 @@ soroban-debug inspect [OPTIONS]
 
 Options:
   -c, --contract <FILE>     Path to the contract WASM file
+      --dependency-graph     Export cross-contract dependency graph (DOT + Mermaid)
 ```
+
+For full examples, see [docs/dependency-graph.md](docs/dependency-graph.md).
 
 ### Completions Command
 
@@ -526,10 +575,10 @@ show_events = true
 
 The CLI supports **screen-reader compatible** and **low-complexity** output so that all information is conveyed via text, not only color or Unicode symbols.
 
-- **`NO_COLOR`**  
+- **`NO_COLOR`**
   If the `NO_COLOR` environment variable is set and not empty, the debugger disables all ANSI color output. Status is then shown with text labels (e.g. `[PASS]`, `[FAIL]`, `[INFO]`, `[WARN]`) instead of colored text.
 
-- **`--no-unicode`**  
+- **`--no-unicode`**
   Use ASCII-only output: no Unicode box-drawing characters (e.g. `┌`, `─`, `│`) or symbols. Box-drawing is replaced with `+`, `-`, `|`; bullets and arrows use `*` and `>`. Spinners are replaced with static text such as `[WORKING...]`.
 
 **Example (screen reader friendly):**
@@ -616,12 +665,15 @@ cargo bench
 
 | Component | Operation | Time (Baseline) |
 |-----------|-----------|-----------------|
-| Runtime | WASM Loading (100KB) | ~15 µs |
+| Runtime | WASM Loading (counter.wasm) | ~2.8 ms |
+| Runtime | Contract Execution (avg) | ~1.6 ms |
 | Runtime | Breakpoint Check (100 set) | ~20 ns |
 | Runtime | Call Stack Push/Pop | ~50 ns |
-| Parser | Argument Parsing (Complex) | ~100 µs |
-| Inspector | Storage Snapshot (1000 items) | ~0.5 ns |
-| Inspector | Storage Diff (1000 items) | ~60 µs |
+| Parser | Argument Parsing (Complex) | ~14 µs |
+| Inspector | Storage Snapshot (1000 items) | ~230 µs |
+| Inspector | Storage Diff (1000 items) | ~240 µs |
+
+> **Note**: These benchmarks were conducted on a standard development machine. Actual times may vary based on environment and contract complexity.
 
 Benchmarks are run automatically in CI to ensure performance stays within acceptable bounds.
 
@@ -632,24 +684,7 @@ Benchmarks are run automatically in CI to ensure performance stays within accept
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit issues and pull requests.
-
-### Development Setup
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `cargo test`
-5. Submit a pull request
-
-### Code Style
-
-This project follows standard Rust formatting:
-
-```bash
-cargo fmt
-cargo clippy
-```
+Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, workflow, code style, and PR guidelines.
 
 <!-- ## Roadmap
 
@@ -721,3 +756,35 @@ docker compose run --rm soroban-debug run --contract /contracts/token.wasm --fun
 ## Guides
 
 - [Writing Budget-Efficient Soroban Contracts](docs/optimization-guide.md)
+
+
+
+## JSON Output Mode
+
+Use structured JSON output for automation/CI with the `run` command:
+
+```bash
+soroban-debug run --contract <path/to/contract.wasm> --function <fn> --output json
+```
+
+Example output:
+
+```json
+{
+  "status": "success",
+  "result": {
+    "value": "42"
+  },
+  "budget": {
+    "cpu_instructions": 1200,
+    "memory_bytes": 2048
+  },
+  "errors": null
+}
+```
+
+Default output mode remains pretty, human-readable output:
+
+```bash
+soroban-debug run --contract <path/to/contract.wasm> --function <fn>
+```

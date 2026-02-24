@@ -55,6 +55,8 @@ fn emit_build_metadata() {
     println!("cargo:rustc-env=GIT_HASH={}", git_hash);
     println!("cargo:rustc-env=RUSTC_VERSION={}", rustc_version);
     println!("cargo:rustc-env=BUILD_DATE={}", build_date);
+
+    println!("cargo:rerun-if-changed=.git/HEAD");
 }
 
 fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
@@ -98,7 +100,7 @@ fn render_recursive(cmd: &clap::Command, out_dir: &Path, prefix: &str) -> std::i
         format!("{}-{}", prefix, cmd.get_name())
     };
 
-    let cmd = cmd.clone().name(name.clone());
+    let cmd = cmd.clone();
     let man = clap_mangen::Man::new(cmd.clone());
     let mut buffer: Vec<u8> = Default::default();
     man.render(&mut buffer)?;

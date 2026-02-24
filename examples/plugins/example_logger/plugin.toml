@@ -1,0 +1,16 @@
+name = "example-logger"
+version = "1.0.0"
+description = "Example plugin that logs execution events to a file"
+author = "Soroban Debugger Contributors"
+license = "MIT OR Apache-2.0"
+min_debugger_version = "0.1.0"
+
+[capabilities]
+hooks_execution = true
+provides_commands = true
+provides_formatters = false
+supports_hot_reload = true
+
+library = "libexample_logger_plugin.dylib"
+
+dependencies = []

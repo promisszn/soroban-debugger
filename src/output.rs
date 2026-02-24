@@ -68,11 +68,7 @@ impl OutputConfig {
 
     /// Horizontal rule character(s) for section separators.
     pub fn rule_char() -> &'static str {
-        if Self::no_unicode() {
-            "-"
-        } else {
-            "-"
-        }
+        "-"
     }
 
     /// Double-line rule character for headers.
@@ -122,9 +118,45 @@ impl StatusLabel {
 
 /// Spinner / progress: in no-unicode or accessibility mode, return static text instead of Unicode spinner.
 pub fn spinner_text() -> &'static str {
-    if OutputConfig::no_unicode() {
-        "[WORKING...]"
-    } else {
-        "[WORKING...]"
+    "[WORKING...]"
+}
+
+/// Helper for writing output to both stdout and optionally to a file
+pub struct OutputWriter {
+    file: Option<std::fs::File>,
+}
+
+impl OutputWriter {
+    /// Create a new OutputWriter that optionally writes to a file
+    pub fn new(path: Option<&std::path::Path>, append: bool) -> miette::Result<Self> {
+        let file = if let Some(p) = path {
+            if append {
+                Some(
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(p)
+                        .map_err(|e| miette::miette!("Failed to open output file: {}", e))?,
+                )
+            } else {
+                Some(
+                    std::fs::File::create(p)
+                        .map_err(|e| miette::miette!("Failed to create output file: {}", e))?,
+                )
+            }
+        } else {
+            None
+        };
+        Ok(Self { file })
+    }
+
+    /// Write a line to the file (if configured)
+    pub fn write(&mut self, text: &str) -> miette::Result<()> {
+        if let Some(ref mut f) = self.file {
+            use std::io::Write;
+            writeln!(f, "{}", text)
+                .map_err(|e| miette::miette!("Failed to write to output file: {}", e))?;
+        }
+        Ok(())
     }
 }

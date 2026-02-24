@@ -1,9 +1,7 @@
 use std::time::Duration;
 
-use crate::output::OutputConfig;
-
 /// Represents a single frame in the call stack
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CallFrame {
     pub function: String,
     pub contract_id: Option<String>,
@@ -11,7 +9,7 @@ pub struct CallFrame {
 }
 
 /// Tracks and displays the call stack
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CallStackInspector {
     stack: Vec<CallFrame>,
 }
@@ -52,7 +50,7 @@ impl CallStackInspector {
             return;
         }
 
-        println!("Call Stack:");
+        crate::logging::log_display("Call Stack:", crate::logging::LogLevel::Info);
         for (i, frame) in self.stack.iter().enumerate() {
             let indent = "  ".repeat(i);
             let contract_ctx = if let Some(ref id) = frame.contract_id {
@@ -67,15 +65,23 @@ impl CallStackInspector {
                 "".to_string()
             };
 
-            let arrow = if i == self.stack.len() - 1 {
-                OutputConfig::to_ascii("→ ")
+            if i == self.stack.len() - 1 {
+                crate::logging::log_display(
+                    format!(
+                        "{}→ {}{}{}",
+                        indent, frame.function, contract_ctx, duration_ctx
+                    ),
+                    crate::logging::LogLevel::Info,
+                );
             } else {
-                OutputConfig::to_ascii("└─ ")
-            };
-            println!(
-                "{}{}{}{}{}",
-                indent, arrow, frame.function, contract_ctx, duration_ctx
-            );
+                crate::logging::log_display(
+                    format!(
+                        "{}└─ {}{}{}",
+                        indent, frame.function, contract_ctx, duration_ctx
+                    ),
+                    crate::logging::LogLevel::Info,
+                );
+            }
         }
     }
 

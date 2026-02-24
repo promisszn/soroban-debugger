@@ -3,7 +3,7 @@
 //! This module handles loading network snapshots from files and applying them
 //! to the Soroban debugger environment.
 
-use super::state::{AccountState, ContractState, NetworkSnapshot, SimulatorError};
+use super::state::{AccountState, ContractState, NetworkSnapshot};
 use crate::Result;
 use std::fs;
 use std::path::Path;
@@ -21,11 +21,17 @@ impl SnapshotLoader {
         info!("Loading network snapshot from: {:?}", path);
 
         // Read the file
-        let contents = fs::read_to_string(path).map_err(SimulatorError::IoError)?;
+        let contents = fs::read_to_string(path).map_err(|e| {
+            crate::DebuggerError::FileError(format!(
+                "Failed to read snapshot file {:?}: {}",
+                path, e
+            ))
+        })?;
 
         // Parse JSON
-        let snapshot: NetworkSnapshot =
-            serde_json::from_str(&contents).map_err(SimulatorError::JsonError)?;
+        let snapshot: NetworkSnapshot = serde_json::from_str(&contents).map_err(|e| {
+            crate::DebuggerError::FileError(format!("Failed to parse snapshot JSON: {}", e))
+        })?;
 
         // Validate the snapshot
         snapshot.validate()?;

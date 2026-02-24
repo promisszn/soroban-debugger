@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::{DebuggerError, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -44,11 +44,19 @@ impl Config {
             return Ok(Config::default());
         }
 
-        let content = fs::read_to_string(config_path)
-            .with_context(|| format!("Failed to read config file: {:?}", config_path))?;
+        let content = fs::read_to_string(config_path).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to read config file {:?}: {}",
+                config_path, e
+            ))
+        })?;
 
-        let config: Config = toml::from_str(&content)
-            .with_context(|| format!("Failed to parse TOML config from: {:?}", config_path))?;
+        let config: Config = toml::from_str(&content).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to parse TOML config from {:?}: {}",
+                config_path, e
+            ))
+        })?;
 
         Ok(config)
     }

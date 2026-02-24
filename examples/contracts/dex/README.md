@@ -68,10 +68,10 @@ soroban contract invoke --id <CONTRACT_ID> -- swap --token_in true --amount_in 1
 ```
 
 4. **Inspect storage during debugging**:
-   - **Before swap**: 
+   - **Before swap**:
      - `ReserveA`: 1000
      - `ReserveB`: 2000
-   - **Calculation**: 
+   - **Calculation**:
      - `reserve_in`: 1000, `reserve_out`: 2000
      - `amount_out = (2000 * 100) / (1000 + 100) = 181`
    - **After swap**:
@@ -110,7 +110,7 @@ soroban contract invoke --id <CONTRACT_ID> -- swap --token_in true --amount_in 5
 # Check reserves
 soroban contract invoke --id <CONTRACT_ID> -- get_price --token_in true
 
-# Swap 2: B → A  
+# Swap 2: B → A
 soroban contract invoke --id <CONTRACT_ID> -- swap --token_in false --amount_in 100
 
 # Observe reserve changes in both directions

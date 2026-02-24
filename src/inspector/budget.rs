@@ -54,15 +54,21 @@ impl BudgetInspector {
                 Severity::Critical => "[CRITICAL]",
             };
 
-            println!(
-                "  {} {} usage at {:.1}%",
-                prefix.with(color),
-                warning.resource,
-                warning.percentage
+            crate::logging::log_display(
+                format!(
+                    "  {} {} usage at {:.1}%",
+                    prefix.with(color),
+                    warning.resource,
+                    warning.percentage
+                ),
+                crate::logging::LogLevel::Warn,
             );
 
             if let Some(suggestion) = warning.suggestion {
-                println!("    Suggestion: {}", suggestion.italic());
+                crate::logging::log_display(
+                    format!("    Suggestion: {}", suggestion.italic()),
+                    crate::logging::LogLevel::Warn,
+                );
             }
         }
     }
@@ -392,30 +398,93 @@ pub struct MemorySummary {
 
 impl MemorySummary {
     pub fn display(&self) {
-        println!("\n=== Memory Allocation Summary ===");
-        println!("Peak Memory Usage: {} bytes", self.peak_memory);
-        println!("Allocation Count: {}", self.allocation_count);
-        println!(
-            "Total Allocated Bytes: {} bytes",
-            self.total_allocated_bytes
+        crate::logging::log_display(
+            "\n=== Memory Allocation Summary ===",
+            crate::logging::LogLevel::Info,
         );
-        println!("Initial Memory: {} bytes", self.initial_memory);
-        println!("Final Memory: {} bytes", self.final_memory);
-        println!(
-            "Memory Delta: {} bytes",
-            self.final_memory.saturating_sub(self.initial_memory)
+        crate::logging::log_display(
+            format!("Peak Memory Usage: {} bytes", self.peak_memory),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!("Allocation Count: {}", self.allocation_count),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!(
+                "Total Allocated Bytes: {} bytes",
+                self.total_allocated_bytes
+            ),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!("Initial Memory: {} bytes", self.initial_memory),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!("Final Memory: {} bytes", self.final_memory),
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            format!(
+                "Memory Delta: {} bytes",
+                self.final_memory.saturating_sub(self.initial_memory)
+            ),
+            crate::logging::LogLevel::Info,
         );
 
         if !self.top_allocations.is_empty() {
-            println!("\nTop 5 Largest Allocations:");
+            crate::logging::log_display(
+                "\nTop 5 Largest Allocations:",
+                crate::logging::LogLevel::Info,
+            );
             for (idx, alloc) in self.top_allocations.iter().enumerate() {
-                println!("  {}. {} bytes at {}", idx + 1, alloc.size, alloc.location);
+                crate::logging::log_display(
+                    format!("  {}. {} bytes at {}", idx + 1, alloc.size, alloc.location),
+                    crate::logging::LogLevel::Info,
+                );
             }
         }
-        println!();
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
     }
 
     pub fn to_json(&self) -> serde_json::Result<String> {
         serde_json::to_string_pretty(self)
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    #[test]
+    fn memory_tracker_tracks_count_peak_and_total() {
+        let mut tracker = MemoryTracker::new(100);
+
+        tracker.record_memory_change(100, 180, "alloc:a");
+        tracker.record_memory_change(180, 240, "alloc:b");
+        tracker.record_memory_change(240, 220, "free-ish");
+        tracker.record_memory_change(220, 260, "alloc:c");
+
+        assert_eq!(tracker.allocation_count(), 3);
+        assert_eq!(tracker.total_allocated_bytes(), 80 + 60 + 40);
+        assert_eq!(tracker.peak_memory(), 260);
+    }
+
+    #[test]
+    fn memory_tracker_returns_top_five_largest_allocations_sorted() {
+        let mut tracker = MemoryTracker::new(0);
+        let mut current = 0;
+        let sizes = [10_u64, 80, 30, 50, 20, 70, 40];
+
+        for (idx, size) in sizes.iter().enumerate() {
+            let previous = current;
+            current += size;
+            tracker.record_memory_change(previous, current, &format!("alloc:{idx}"));
+        }
+
+        let top = tracker.get_top_allocations(5);
+        let top_sizes: Vec<u64> = top.into_iter().map(|a| a.size).collect();
+        assert_eq!(top_sizes, vec![80, 70, 50, 40, 30]);
     }
 }

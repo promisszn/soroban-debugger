@@ -3,7 +3,7 @@ use crate::inspector::{BudgetInspector, StorageInspector};
 use crate::Result;
 use std::io::{self, Write};
 
-/// Terminal user interface for interactive debugging
+/// Terminal user interface for interactive debugging.
 pub struct DebuggerUI {
     engine: DebuggerEngine,
     storage_inspector: StorageInspector,
@@ -17,16 +17,20 @@ impl DebuggerUI {
         })
     }
 
-    /// Run the interactive UI loop
+    /// Run the interactive UI loop.
     pub fn run(&mut self) -> Result<()> {
         self.print_help();
 
         loop {
             print!("\n(debug) ");
-            io::stdout().flush()?;
+            io::stdout().flush().map_err(|e| {
+                crate::DebuggerError::FileError(format!("Failed to flush stdout: {}", e))
+            })?;
 
             let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
+            io::stdin().read_line(&mut input).map_err(|e| {
+                crate::DebuggerError::FileError(format!("Failed to read line: {}", e))
+            })?;
 
             let command = input.trim();
             if command.is_empty() {
@@ -48,7 +52,6 @@ impl DebuggerUI {
         Ok(())
     }
 
-    /// Handle a single command
     fn handle_command(&mut self, command: &str) -> Result<bool> {
         let parts: Vec<&str> = command.split_whitespace().collect();
         if parts.is_empty() {
@@ -58,47 +61,13 @@ impl DebuggerUI {
         match parts[0] {
             "s" | "step" => {
                 self.engine.step()?;
-                crate::logging::log_step(self.engine.state().lock().unwrap().step_count() as u64);
+                if let Ok(state) = self.engine.state().lock() {
+                    crate::logging::log_step(state.step_count() as u64);
+                }
             }
             "c" | "continue" => {
                 self.engine.continue_execution()?;
                 tracing::info!("Execution continuing");
-            }
-            "sb" | "step-back" => {
-                let stepped = self.engine.step_back()?;
-                if stepped {
-                    println!("Stepped back");
-                    self.inspect();
-                } else {
-                    println!("Already at beginning of history");
-                }
-            }
-            "cb" | "continue-back" => {
-                self.engine.continue_back()?;
-                println!("Continued back");
-                self.inspect();
-            }
-            "goto" => {
-                if parts.len() < 2 {
-                    println!("Usage: goto <step>");
-                } else if let Ok(step) = parts[1].parse::<usize>() {
-                    self.engine.goto_step(step)?;
-                    println!("Jumped to step {}", step);
-                    self.inspect();
-                } else {
-                    println!("Invalid step number");
-                }
-            }
-            "timeline" | "tl" => {
-                let timeline = self.engine.get_timeline();
-                println!("\n=== Execution Timeline ===");
-                for (i, snap) in timeline.get_history().iter().enumerate() {
-                    let current = if i == timeline.current_pos() { "▶" } else { " " };
-                    println!(
-                        "{} {:>3}: Step {:>3} | fn: {:<15} | IP: {:>3}",
-                        current, i, snap.step, snap.function, snap.instruction_index
-                    );
-                }
             }
             "i" | "inspect" => {
                 self.inspect();
@@ -107,7 +76,9 @@ impl DebuggerUI {
                 self.storage_inspector.display();
             }
             "stack" => {
-                self.engine.state().lock().unwrap().call_stack().display();
+                if let Ok(state) = self.engine.state().lock() {
+                    state.call_stack().display();
+                }
             }
             "budget" => {
                 BudgetInspector::display(self.engine.executor().host());
@@ -116,35 +87,24 @@ impl DebuggerUI {
                 if parts.len() < 2 {
                     tracing::warn!("breakpoint set without function name");
                 } else {
-                    let func = parts[1];
-                    let condition = if parts.len() > 2 {
-                        let cond_str = parts[2..].join(" ");
-                        match crate::debugger::breakpoint::BreakpointManager::parse_condition(&cond_str) {
-                            Ok(c) => Some(c),
-                            Err(e) => {
-                                println!("Invalid condition: {}", e);
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
-                    self.engine.breakpoints_mut().add(func, condition);
-                    if let Some(ref c) = self.engine.breakpoints_mut().list().iter().find(|b| b.function == func).and_then(|b| b.condition.as_ref()) {
-                        println!("Conditional breakpoint set: {} (if {})", func, c);
-                    } else {
-                        crate::logging::log_breakpoint_set(func);
-                    }
+                    self.engine.breakpoints_mut().add(parts[1]);
+                    crate::logging::log_breakpoint_set(parts[1]);
                 }
             }
             "list-breaks" => {
                 let breakpoints = self.engine.breakpoints_mut().list();
-                if !breakpoints.is_empty() {
-                    for bp in breakpoints {
-                        tracing::debug!(breakpoint = bp, "Active breakpoint");
-                    }
+                if breakpoints.is_empty() {
+                    crate::logging::log_display(
+                        "No breakpoints set",
+                        crate::logging::LogLevel::Info,
+                    );
                 } else {
-                    tracing::debug!("No breakpoints currently set");
+                    for bp in breakpoints {
+                        crate::logging::log_display(
+                            format!("- {}", bp),
+                            crate::logging::LogLevel::Info,
+                        );
+                    }
                 }
             }
             "clear" => {
@@ -156,60 +116,91 @@ impl DebuggerUI {
                     tracing::debug!(breakpoint = parts[1], "No breakpoint found at function");
                 }
             }
-            "help" => {
-                self.print_help();
-            }
+            "help" => self.print_help(),
             "q" | "quit" | "exit" => {
                 tracing::info!("Exiting debugger");
                 return Ok(true);
             }
-            _ => {
-                tracing::warn!(command = parts[0], "Unknown command");
-            }
+            _ => tracing::warn!(command = parts[0], "Unknown command"),
         }
 
         Ok(false)
     }
 
-    /// Display current state
     fn inspect(&self) {
-        println!("\n=== Current State ===");
-        let steps = self.engine.state().lock().unwrap().step_count();
-        let paused = self.engine.is_paused();
-        if let Some(func) = self.engine.state().lock().unwrap().current_function() {
-            tracing::info!(
-                function = func,
-                steps = steps,
-                paused = paused,
-                "Current execution state"
+        crate::logging::log_display("\n=== Current State ===", crate::logging::LogLevel::Info);
+        if let Ok(state) = self.engine.state().lock() {
+            if let Some(func) = state.current_function() {
+                crate::logging::log_display(
+                    format!("Function: {}", func),
+                    crate::logging::LogLevel::Info,
+                );
+            } else {
+                crate::logging::log_display("Function: (none)", crate::logging::LogLevel::Info);
+            }
+            crate::logging::log_display(
+                format!("Steps: {}", state.step_count()),
+                crate::logging::LogLevel::Info,
             );
+            crate::logging::log_display(
+                format!("Paused: {}", self.engine.is_paused()),
+                crate::logging::LogLevel::Info,
+            );
+            crate::logging::log_display("", crate::logging::LogLevel::Info);
+            state.call_stack().display();
         } else {
-            tracing::info!(steps = steps, paused = paused, "Current execution state");
+            crate::logging::log_display("State unavailable", crate::logging::LogLevel::Info);
         }
-        println!("Paused: {}", self.engine.is_paused());
-
-        println!();
-        self.engine.state().lock().unwrap().call_stack().display();
     }
 
-    /// Print help message
     fn print_help(&self) {
-        tracing::info!("Interactive debugger commands: step, continue, inspect, storage, stack, budget, break, list-breaks, clear, help, quit");
-        println!("Interactive debugger commands:");
-        println!("  step | s           Step execution");
-        println!("  step-back | sb     Step backward in time");
-        println!("  continue | c       Continue execution");
-        println!("  continue-back | cb Continue execution backwards");
-        println!("  goto <step>        Jump to specific step");
-        println!("  timeline | tl      Show execution timeline");
-        println!("  inspect | i        Show current state");
-        println!("  storage            Show tracked storage view");
-        println!("  stack              Show call stack");
-        println!("  budget             Show budget usage");
-        println!("  break <func> [cond] Set breakpoint with optional condition");
-        println!("  list-breaks        List breakpoints");
-        println!("  clear <func>       Clear breakpoint");
-        println!("  help               Show this help");
-        println!("  quit | q           Exit debugger");
+        crate::logging::log_display(
+            "Interactive debugger commands:",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  step | s           Step execution",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  continue | c       Continue execution",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  inspect | i        Show current state",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  storage            Show tracked storage view",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  stack              Show call stack",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  budget             Show budget usage",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  break <func>       Set breakpoint",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  list-breaks        List breakpoints",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  clear <func>       Clear breakpoint",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  help               Show this help",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  quit | q           Exit debugger",
+            crate::logging::LogLevel::Info,
+        );
     }
 }

@@ -4,12 +4,13 @@
 //! Snapshots represent the complete state of the Soroban ledger at a specific point,
 //! including ledger metadata, accounts, and deployed contracts.
 
+use miette::Diagnostic;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
 /// Error type for simulator operations
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Diagnostic)]
 pub enum SimulatorError {
     #[error("Invalid account address: {0}")]
     InvalidAddress(String),
@@ -244,12 +245,15 @@ impl AccountState {
         }
 
         // Validate balance is a valid number
-        self.balance.parse::<u128>().map_err(|_| {
-            anyhow::anyhow!(SimulatorError::InvalidBalance(format!(
-                "Balance must be a valid unsigned integer: {}",
-                self.balance
-            )))
-        })?;
+        self.balance
+            .parse::<u128>()
+            .map_err(|_| -> miette::Report {
+                SimulatorError::InvalidBalance(format!(
+                    "Balance must be a valid unsigned integer: {}",
+                    self.balance
+                ))
+                .into()
+            })?;
 
         Ok(())
     }

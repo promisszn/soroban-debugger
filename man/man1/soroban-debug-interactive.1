@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH soroban-debug-interactive 1  "soroban-debug-interactive " 
+.TH interactive 1  "interactive " 
 .SH NAME
-soroban\-debug\-interactive \- Start an interactive debugging session
+interactive \- Start an interactive debugging session
 .SH SYNOPSIS
-\fBsoroban\-debug\-interactive\fR <\fB\-c\fR|\fB\-\-contract\fR> [\fB\-\-network\-snapshot\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBinteractive\fR <\fB\-c\fR|\fB\-\-contract\fR> [\fB\-\-network\-snapshot\fR] [\fB\-\-expected\-hash\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Start an interactive debugging session
 .SH OPTIONS
@@ -14,6 +14,9 @@ Path to the contract WASM file
 .TP
 \fB\-\-network\-snapshot\fR \fI<NETWORK_SNAPSHOT>\fR
 Network snapshot file to load before starting interactive session
+.TP
+\fB\-\-expected\-hash\fR \fI<EXPECTED_HASH>\fR
+Expected SHA\-256 hash of the WASM file. If provided, loading will fail if the computed hash does not match
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

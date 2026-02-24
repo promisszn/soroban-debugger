@@ -1,6 +1,6 @@
 use crate::profiler::session::ProfileSession;
 use crate::runtime::executor::ContractExecutor;
-use crate::Result;
+use crate::{DebuggerError, Result};
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write;
@@ -91,8 +91,7 @@ impl GasOptimizer {
         function_name: &str,
         args: Option<&str>,
     ) -> Result<FunctionProfile> {
-        let host = self.executor.host();
-        let session = ProfileSession::start(host);
+        let session = ProfileSession::start(self.executor.host());
 
         let operations = Vec::new();
         let storage_accesses: HashMap<String, StorageAccess> = HashMap::new();
@@ -102,7 +101,7 @@ impl GasOptimizer {
         }));
 
         // Always finish the session so we still capture metrics up to failure.
-        let metrics = session.finish();
+        let metrics = session.finish(self.executor.host());
         let total_cpu = metrics.cpu_instructions;
         let total_memory = metrics.memory_bytes;
         let wall_time_ms = metrics.wall_time.as_millis();
@@ -139,9 +138,9 @@ impl GasOptimizer {
                     .insert(function_name.to_string(), profile.clone());
 
                 // Return a normal error instead of crashing the whole CLI
-                return Err(anyhow::anyhow!(
-            "Contract execution panicked (likely budget exceeded). Try smaller inputs or optimize allocations."
-        ));
+                return Err(DebuggerError::ExecutionError(
+            "Contract execution panicked (likely budget exceeded). Try smaller inputs or optimize allocations.".to_string()
+        ).into());
             }
         }
 

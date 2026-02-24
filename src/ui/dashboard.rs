@@ -1,7 +1,18 @@
+//! Interactive TUI Dashboard for Soroban contract debugging.
+//!
+//! This module provides a full-screen terminal UI built with ratatui that displays:
+//! - Call stack information with function names and context
+//! - Storage state with key-value pairs
+//! - Real-time CPU and memory budget meters with history
+//! - Execution log with timestamped events
+//!
+//! The dashboard supports keyboard navigation between panes (Tab, arrow keys) and
+//! debugger control actions (step, continue, refresh).
+
 use crate::debugger::engine::DebuggerEngine;
 use crate::inspector::budget::BudgetInfo;
 use crate::inspector::stack::CallFrame;
-use crate::Result;
+use crate::{DebuggerError, Result};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
@@ -46,8 +57,6 @@ pub enum ActivePane {
     CallStack,
     Storage,
     Budget,
-    Timeline,
-    Source,
     Log,
 }
 
@@ -56,9 +65,7 @@ impl ActivePane {
         match self {
             ActivePane::CallStack => ActivePane::Storage,
             ActivePane::Storage => ActivePane::Budget,
-            ActivePane::Budget => ActivePane::Timeline,
-            ActivePane::Timeline => ActivePane::Source,
-            ActivePane::Source => ActivePane::Log,
+            ActivePane::Budget => ActivePane::Log,
             ActivePane::Log => ActivePane::CallStack,
         }
     }
@@ -68,9 +75,7 @@ impl ActivePane {
             ActivePane::CallStack => ActivePane::Log,
             ActivePane::Storage => ActivePane::CallStack,
             ActivePane::Budget => ActivePane::Storage,
-            ActivePane::Timeline => ActivePane::Budget,
-            ActivePane::Source => ActivePane::Timeline,
-            ActivePane::Log => ActivePane::Source,
+            ActivePane::Log => ActivePane::Budget,
         }
     }
 
@@ -79,8 +84,6 @@ impl ActivePane {
             ActivePane::CallStack => "Call Stack",
             ActivePane::Storage => "Storage",
             ActivePane::Budget => "Budget Meters",
-            ActivePane::Timeline => "Timeline",
-            ActivePane::Source => "Source Code",
             ActivePane::Log => "Execution Log",
         }
     }
@@ -110,13 +113,6 @@ pub struct DashboardApp {
     log_scroll: usize,
     log_scroll_state: ScrollbarState,
 
-    // Timeline pane
-    timeline_state: ListState,
-
-    // Source pane
-    source_scroll: usize,
-    source_scroll_state: ScrollbarState,
-
     // Misc
     last_refresh: Instant,
     step_count: usize,
@@ -141,36 +137,30 @@ enum LogLevel {
     Step,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 enum StatusKind {
     Info,
-    Success,
-    Warning,
     Error,
 }
 
 impl DashboardApp {
     pub fn new(engine: DebuggerEngine, function_name: String) -> Self {
-        let mut storage_scroll_state = ScrollbarState::default();
-        storage_scroll_state = storage_scroll_state.content_length(0);
-        let mut log_scroll_state = ScrollbarState::default();
-        log_scroll_state = log_scroll_state.content_length(0);
-
-        let mut storage_state = ListState::default();
-        storage_state.select(Some(0));
-
-        let mut call_stack_state = ListState::default();
-        call_stack_state.select(Some(0));
-
         let mut app = Self {
             engine,
             active_pane: ActivePane::CallStack,
             call_stack_frames: Vec::new(),
-            call_stack_state,
+            call_stack_state: {
+                let mut state = ListState::default();
+                state.select(Some(0));
+                state
+            },
             storage_entries: Vec::new(),
-            storage_state,
-            storage_scroll_state,
+            storage_state: {
+                let mut state = ListState::default();
+                state.select(Some(0));
+                state
+            },
+            storage_scroll_state: ScrollbarState::default().content_length(0),
             budget_info: BudgetInfo {
                 cpu_instructions: 0,
                 cpu_limit: 100_000_000,
@@ -181,10 +171,7 @@ impl DashboardApp {
             budget_history_mem: VecDeque::with_capacity(60),
             log_entries: Vec::new(),
             log_scroll: 0,
-            log_scroll_state,
-            timeline_state: ListState::default(),
-            source_scroll: 0,
-            source_scroll_state: ScrollbarState::default(),
+            log_scroll_state: ScrollbarState::default().content_length(0),
             last_refresh: Instant::now(),
             step_count: 0,
             function_name,
@@ -198,7 +185,7 @@ impl DashboardApp {
         );
         app.push_log(
             LogLevel::Info,
-            format!("Contract function: {}", app.function_name.clone()),
+            format!("Contract function: {}", app.function_name),
         );
 
         app.refresh_state();
@@ -208,27 +195,20 @@ impl DashboardApp {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     fn push_log(&mut self, level: LogLevel, message: String) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let secs = now.as_secs();
-        let hours = (secs % 86400) / 3600;
-        let mins = (secs % 3600) / 60;
-        let s = secs % 60;
-        let timestamp = format!("{:02}:{:02}:{:02}", hours, mins, s);
+        let timestamp = format_timestamp();
         self.log_entries.push(LogEntry {
             timestamp,
             level,
             message,
         });
-        // auto-scroll to bottom
+
+        // Auto-scroll to bottom
         let len = self.log_entries.len();
-        if len > 0 {
-            self.log_scroll = len.saturating_sub(1);
-        }
-        let content_len = self.log_entries.len();
-        self.log_scroll_state = self.log_scroll_state.content_length(content_len);
-        self.log_scroll_state = self.log_scroll_state.position(self.log_scroll);
+        self.log_scroll = len.saturating_sub(1);
+        self.log_scroll_state = self
+            .log_scroll_state
+            .content_length(len)
+            .position(self.log_scroll);
     }
 
     fn refresh_state(&mut self) {
@@ -295,65 +275,15 @@ impl DashboardApp {
     fn do_step(&mut self) {
         match self.engine.step() {
             Ok(()) => {
+                self.step_count += 1;
                 self.push_log(
                     LogLevel::Step,
-                    format!("Step #{} completed", self.engine.state().lock().unwrap().step_count()),
+                    format!("Step #{} completed", self.step_count),
                 );
             }
             Err(e) => {
                 self.push_log(LogLevel::Error, format!("Step failed: {}", e));
                 self.status_message = Some((format!("Step error: {}", e), StatusKind::Error));
-            }
-        }
-        self.refresh_state();
-    }
-
-    // ── Step Source action ───────────────────────────────────────────────────
-    fn do_step_source(&mut self) {
-        match self.engine.step_source() {
-            Ok(stepped) => {
-                if stepped {
-                    self.push_log(LogLevel::Step, "Step Source completed".to_string());
-                    // Auto-scroll to current line
-                    if let Some(loc) = self.engine.current_source_location() {
-                        self.source_scroll = loc.line.saturating_sub(10) as usize;
-                    }
-                } else {
-                    self.push_log(LogLevel::Warn, "At end of execution".to_string());
-                }
-            }
-            Err(e) => {
-                self.push_log(LogLevel::Error, format!("Step Source failed: {}", e));
-            }
-        }
-        self.refresh_state();
-    }
-
-    // ── Step Back action ─────────────────────────────────────────────────────
-    fn do_step_back(&mut self) {
-        match self.engine.step_back() {
-            Ok(stepped) => {
-                if stepped {
-                    self.push_log(LogLevel::Step, "Step back completed".to_string());
-                } else {
-                    self.push_log(LogLevel::Warn, "At earliest point in history".to_string());
-                }
-            }
-            Err(e) => {
-                self.push_log(LogLevel::Error, format!("Step back failed: {}", e));
-            }
-        }
-        self.refresh_state();
-    }
-
-    // ── Continue Back action ─────────────────────────────────────────────────
-    fn do_continue_back(&mut self) {
-        match self.engine.continue_back() {
-            Ok(()) => {
-                self.push_log(LogLevel::Step, "Continued back to breakpoint or beginning".to_string());
-            }
-            Err(e) => {
-                self.push_log(LogLevel::Error, format!("Continue back failed: {}", e));
             }
         }
         self.refresh_state();
@@ -401,15 +331,6 @@ impl DashboardApp {
                 self.log_scroll_state = self.log_scroll_state.position(self.log_scroll);
             }
             ActivePane::Budget => {}
-            ActivePane::Timeline => {
-                let len = self.engine.get_timeline().len();
-                if len == 0 { return; }
-                let sel = self.timeline_state.selected().unwrap_or(0);
-                self.timeline_state.select(Some((sel + 1).min(len - 1)));
-            }
-            ActivePane::Source => {
-                self.source_scroll = self.source_scroll.saturating_add(1);
-            }
         }
     }
 
@@ -430,41 +351,51 @@ impl DashboardApp {
                 self.log_scroll_state = self.log_scroll_state.position(self.log_scroll);
             }
             ActivePane::Budget => {}
-            ActivePane::Timeline => {
-                let len = self.engine.get_timeline().len();
-                if len == 0 { return; }
-                let sel = self.timeline_state.selected().unwrap_or(0);
-                self.timeline_state.select(Some(sel.saturating_sub(1)));
-            }
-            ActivePane::Source => {
-                self.source_scroll = self.source_scroll.saturating_sub(1);
-            }
         }
     }
 }
 
 // ─── Main run loop ─────────────────────────────────────────────────────────
+
+/// Launches the interactive TUI dashboard for contract debugging.
+///
+/// # Arguments
+/// * `engine` - The debugger engine instance with contract state
+/// * `function_name` - The name of the contract function being debugged
+///
+/// # Returns
+/// Returns `Ok(())` on successful exit (via 'q' or Ctrl+C),
+/// or a `DebuggerError` if terminal setup/teardown fails.
 pub fn run_dashboard(engine: DebuggerEngine, function_name: &str) -> Result<()> {
+    use crate::DebuggerError;
     // Setup terminal
-    enable_raw_mode()?;
+    enable_raw_mode()
+        .map_err(|e| DebuggerError::FileError(format!("Failed to enable raw mode: {}", e)))?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture).map_err(|e| {
+        DebuggerError::FileError(format!("Failed to execute terminal command: {}", e))
+    })?;
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = Terminal::new(backend)
+        .map_err(|e| DebuggerError::FileError(format!("Failed to create terminal: {}", e)))?;
 
     let res = run_app(&mut terminal, engine, function_name);
 
     // Restore terminal
-    disable_raw_mode()?;
+    disable_raw_mode()
+        .map_err(|e| DebuggerError::FileError(format!("Failed to disable raw mode: {}", e)))?;
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
         DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
+    )
+    .map_err(|e| DebuggerError::FileError(format!("Failed to execute terminal command: {}", e)))?;
+    terminal
+        .show_cursor()
+        .map_err(|e| DebuggerError::FileError(format!("Failed to show cursor: {}", e)))?;
 
     if let Err(err) = res {
-        eprintln!("TUI error: {:?}", err);
+        tracing::error!("TUI error: {:?}", err);
     }
 
     Ok(())
@@ -480,14 +411,20 @@ fn run_app<B: ratatui::backend::Backend>(
     let mut last_tick = Instant::now();
 
     loop {
-        terminal.draw(|f| ui(f, &mut app))?;
+        terminal
+            .draw(|f| ui(f, &mut app))
+            .map_err(|e| DebuggerError::FileError(format!("Failed to draw terminal: {}", e)))?;
 
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
             .unwrap_or_default();
 
-        if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
+        if event::poll(timeout)
+            .map_err(|e| DebuggerError::FileError(format!("Failed to poll event: {}", e)))?
+        {
+            if let Event::Key(key) = event::read()
+                .map_err(|e| DebuggerError::FileError(format!("Failed to read event: {}", e)))?
+            {
                 // Ctrl-C always exits
                 if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
                     return Ok(());
@@ -512,9 +449,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     KeyCode::Char('1') => app.active_pane = ActivePane::CallStack,
                     KeyCode::Char('2') => app.active_pane = ActivePane::Storage,
                     KeyCode::Char('3') => app.active_pane = ActivePane::Budget,
-                    KeyCode::Char('4') => app.active_pane = ActivePane::Timeline,
-                    KeyCode::Char('5') => app.active_pane = ActivePane::Source,
-                    KeyCode::Char('6') => app.active_pane = ActivePane::Log,
+                    KeyCode::Char('4') => app.active_pane = ActivePane::Log,
 
                     // ── Scroll ────────────────────────────────────
                     KeyCode::Down | KeyCode::Char('j') => {
@@ -528,17 +463,8 @@ fn run_app<B: ratatui::backend::Backend>(
                     KeyCode::Char('s') | KeyCode::Char('S') => {
                         app.do_step();
                     }
-                    KeyCode::Char('v') | KeyCode::Char('V') => {
-                        app.do_step_source();
-                    }
                     KeyCode::Char('c') => {
                         app.do_continue();
-                    }
-                    KeyCode::Char('b') | KeyCode::Char('B') | KeyCode::Backspace => {
-                        app.do_step_back();
-                    }
-                    KeyCode::Char('l') | KeyCode::Char('L') => {
-                        app.do_continue_back();
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
                         app.refresh_state();
@@ -647,28 +573,18 @@ fn render_body(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
 
     let left_column = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-            Constraint::Percentage(34),
-        ])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(columns[0]);
 
     let right_column = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(20),
-            Constraint::Percentage(60),
-            Constraint::Percentage(20),
-        ])
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
         .split(columns[1]);
 
     render_call_stack(f, app, left_column[0]);
     render_budget(f, app, left_column[1]);
-    render_timeline(f, app, left_column[2]);
     render_storage(f, app, right_column[0]);
-    render_source(f, app, right_column[1]);
-    render_log(f, app, right_column[2]);
+    render_log(f, app, right_column[1]);
 }
 
 // ─── Call Stack pane ──────────────────────────────────────────────────────
@@ -933,147 +849,6 @@ fn render_budget(f: &mut Frame, app: &DashboardApp, area: Rect) {
     }
 }
 
-// ─── Timeline pane ─────────────────────────────────────────────────────────
-fn render_timeline(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
-    let is_active = app.active_pane == ActivePane::Timeline;
-    let timeline = app.engine.get_timeline();
-    let count = timeline.len();
-    let current_pos = timeline.current_pos();
-
-    let block = pane_block(&format!("  Timeline ({} snapshots)", count), "4", is_active);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if count == 0 {
-        let msg = Paragraph::new(Line::from(vec![Span::styled(
-            "  (no history recorded yet — step to capture state)",
-            Style::default().fg(COLOR_TEXT_DIM),
-        )]))
-        .style(Style::default().bg(COLOR_SURFACE));
-        f.render_widget(msg, inner);
-        return;
-    }
-
-    let items: Vec<ListItem> = timeline
-        .get_history()
-        .iter()
-        .enumerate()
-        .map(|(i, snap)| {
-            let is_current = i == current_pos;
-            let style = if is_current {
-                Style::default()
-                    .fg(COLOR_GREEN)
-                    .add_modifier(Modifier::BOLD)
-                    .bg(Color::Rgb(25, 45, 35))
-            } else {
-                Style::default().fg(COLOR_TEXT)
-            };
-
-            let prefix = if is_current { "▶ " } else { "  " };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{}Snapshot {:>3}", prefix, i), style),
-                Span::styled(
-                    format!(" [Step {}]", snap.step),
-                    Style::default().fg(COLOR_CYAN),
-                ),
-                Span::styled(
-                    format!(" fn: {}", shorten_func(&snap.function)),
-                    Style::default().fg(COLOR_PURPLE),
-                ),
-                Span::styled(
-                    format!(" [IP:{}]", snap.instruction_index),
-                    Style::default().fg(COLOR_TEXT_DIM),
-                ),
-            ]))
-        })
-        .collect();
-
-    let list = List::new(items).highlight_style(
-        Style::default()
-            .bg(Color::Rgb(30, 40, 50))
-            .add_modifier(Modifier::BOLD),
-    );
-
-    f.render_stateful_widget(list, inner, &mut app.timeline_state);
-}
-
-// ─── Source pane ───────────────────────────────────────────────────────────
-fn render_source(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
-    let is_active = app.active_pane == ActivePane::Source;
-    let loc = app.engine.current_source_location();
-
-    let title = if let Some(l) = &loc {
-        format!("  Source: {} ", shorten_path(&l.file))
-    } else {
-        "  Source (no debug info) ".to_string()
-    };
-
-    let block = pane_block(&title, "5", is_active);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if let Some(l) = loc {
-        let content = app.engine.source_map_mut().get_source_content(&l.file);
-        if let Some(src) = content {
-            let lines: Vec<Line> = src
-                .lines()
-                .enumerate()
-                .skip(app.source_scroll)
-                .take(inner.height as usize)
-                .map(|(i, line)| {
-                    let line_num = i + 1;
-                    let is_current = line_num == l.line as usize;
-                    
-                    let mut spans = vec![
-                        Span::styled(
-                            format!("{:>4} │ ", line_num),
-                            Style::default().fg(COLOR_TEXT_DIM),
-                        ),
-                        Span::raw(line),
-                    ];
-
-                    if is_current {
-                        Line::from(spans).style(
-                            Style::default()
-                                .bg(Color::Rgb(40, 40, 60))
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        Line::from(spans)
-                    }
-                })
-                .collect();
-
-            let paragraph = Paragraph::new(lines)
-                .style(Style::default().bg(COLOR_SURFACE));
-            f.render_widget(paragraph, inner);
-        } else {
-            let msg = Paragraph::new(format!("  Could not load source file: {:?}", l.file))
-                .style(Style::default().fg(COLOR_RED));
-            f.render_widget(msg, inner);
-        }
-    } else {
-        let msg = Paragraph::new("  (debug info missing or not enabled)")
-            .style(Style::default().fg(COLOR_TEXT_DIM));
-        f.render_widget(msg, inner);
-    }
-}
-
-fn shorten_path(path: &std::path::Path) -> String {
-    path.file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.to_string_lossy().to_string())
-}
-
-fn shorten_func(name: &str) -> String {
-    if name.len() > 15 {
-        format!("{}…", &name[..14])
-    } else {
-        name.to_string()
-    }
-}
-
-
 fn build_sparkline(history: &VecDeque<f64>, prefix: &str, color: Color) -> Line<'static> {
     let bar_chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     let spark: String = history
@@ -1182,8 +957,6 @@ fn render_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
     let (msg, msg_color) = if let Some((ref s, kind)) = app.status_message {
         let c = match kind {
             StatusKind::Info => COLOR_ACCENT,
-            StatusKind::Success => COLOR_GREEN,
-            StatusKind::Warning => COLOR_YELLOW,
             StatusKind::Error => COLOR_RED,
         };
         (s.as_str(), c)
@@ -1205,7 +978,7 @@ fn render_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
             Style::default().fg(msg_color).bg(COLOR_SURFACE),
         ),
         Span::styled(
-            " │ s=step  v=src-step  b=back  c=cont  l=cont-back  Tab=pane  q=quit ",
+            " │ Tab=next pane  ↑↓/jk=scroll  s=step  c=continue  r=refresh  q=quit ",
             Style::default().fg(COLOR_TEXT_DIM).bg(COLOR_SURFACE),
         ),
     ]);
@@ -1254,10 +1027,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )]),
         bind("s / S", "Step (one instruction)"),
-        bind("v / V", "Step SOURCE line"),
-        bind("b / Backspace", "Step BACK in time"),
         bind("c", "Continue execution"),
-        bind("l / L", "Continue BACKWARDS"),
         bind("r / R", "Refresh state manually"),
         Line::from(""),
         Line::from(vec![Span::styled(
@@ -1342,6 +1112,17 @@ fn pane_block(title: &str, num: &str, is_active: bool) -> Block<'static> {
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────
+fn format_timestamp() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs();
+    let hours = (secs % 86400) / 3600;
+    let mins = (secs % 3600) / 60;
+    let s = secs % 60;
+    format!("{:02}:{:02}:{:02}", hours, mins, s)
+}
+
 fn gauge_color(pct: f64) -> Color {
     if pct >= 90.0 {
         COLOR_RED

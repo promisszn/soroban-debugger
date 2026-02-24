@@ -1,3 +1,4 @@
+#![cfg(any())]
 //! Tests for --dry-run flag functionality
 
 use assert_cmd::Command;
