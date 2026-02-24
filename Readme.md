@@ -753,6 +753,9 @@ docker run --rm -it -v "$(pwd):/contracts" ghcr.io/your-org/soroban-debug intera
 ```bash
 docker compose run --rm soroban-debug run --contract /contracts/token.wasm --function transfer
 ```
+## Guides
+
+- [Writing Budget-Efficient Soroban Contracts](docs/optimization-guide.md)
 
 
 
