@@ -15,6 +15,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTRACTS_DIR="${SCRIPT_DIR}/contracts"
 WASM_DIR="${SCRIPT_DIR}/wasm"
+WORKSPACE_TARGET_DIR="${CONTRACTS_DIR}/target/wasm32-unknown-unknown/release"
 
 # Check if wasm32 target is installed
 if ! rustup target list --installed | grep -q "wasm32-unknown-unknown"; then
@@ -38,8 +39,13 @@ for contract_dir in "${CONTRACTS_DIR}"/*/; do
             cd "${contract_dir}"
             cargo build --release --target wasm32-unknown-unknown
             
-            # Find the generated WASM file
-            wasm_file="target/wasm32-unknown-unknown/release/${contract_name//-/_}.wasm"
+            package_name=$(sed -n 's/^name = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+            if [ -z "${package_name}" ]; then
+                echo "    ✗ Failed to determine package name for ${contract_name}"
+                exit 1
+            fi
+
+            wasm_file="${WORKSPACE_TARGET_DIR}/${package_name//-/_}.wasm"
             
             if [ -f "${wasm_file}" ]; then
                 cp "${wasm_file}" "${WASM_DIR}/${contract_name}.wasm"

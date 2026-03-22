@@ -15,7 +15,7 @@ A Visual Studio Code extension that integrates the Soroban smart contract debugg
 
 - Visual Studio Code 1.75.0 or higher
 - Node.js 18+ (for extension development)
-- Soroban CLI with debugger support
+- `soroban-debug` CLI built from this repository or installed in your PATH
 - Rust toolchain with `wasm32-unknown-unknown` target
 
 ## Installation
@@ -70,7 +70,8 @@ Add the following to your project's `.vscode/launch.json`:
       "snapshotPath": "${workspaceFolder}/snapshot.json",
       "entrypoint": "main",
       "args": [],
-      "trace": false
+      "trace": false,
+      "binaryPath": "${workspaceFolder}/target/debug/soroban-debug"
     }
   ]
 }
@@ -116,6 +117,9 @@ Create a `snapshot.json` file with the initial state for your debugger session. 
 
 - **trace** (boolean): Enable detailed trace logging for debugging the adapter itself
   - Default: `false`
+
+- **binaryPath** (string): Optional path to the `soroban-debug` binary
+  - Default: resolved from `${workspaceFolder}/target/debug/soroban-debug`, then PATH
 
 ## Usage Guide
 
@@ -194,9 +198,9 @@ The extension consists of three main components:
 - Manages debug session state
 
 ### CLI Process Wrapper (src/cli/debuggerProcess.ts)
-- Spawns the soroban-debugger CLI process
-- Manages stdio communication
-- Handles process lifecycle
+- Spawns the `soroban-debug server` process
+- Connects to the remote debug protocol over TCP
+- Handles process lifecycle and request/response transport
 
 ### Protocol Types (src/dap/protocol.ts)
 - TypeScript types for DAP events and commands
@@ -212,7 +216,7 @@ The extension consists of three main components:
 
 ### Debugger fails to start
 
-- Ensure `soroban-debugger` CLI is in your PATH
+- Ensure the `soroban-debug` CLI is in your PATH, or set `binaryPath`
 - Verify contract path points to a valid WASM file
 - Check that snapshot.json exists and is valid JSON
 
@@ -258,7 +262,8 @@ npm run vscode:prepublish
 │   │   └── protocol.ts       # Protocol types and utilities
 │   └── cli/
 │       └── debuggerProcess.ts # CLI process wrapper
-├── test/                      # Test files
+│   ├── test/
+│   │   └── runTest.ts        # Extension smoke test
 ├── package.json              # Extension manifest
 ├── tsconfig.json            # TypeScript configuration
 └── README.md                # This file

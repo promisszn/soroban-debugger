@@ -14,6 +14,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ContractsDir = Join-Path $ScriptDir "contracts"
 $WasmDir = Join-Path $ScriptDir "wasm"
+$WorkspaceTargetDir = Join-Path $ContractsDir "target\wasm32-unknown-unknown\release"
 
 # Check if wasm32 target is installed
 $InstalledTargets = rustup target list --installed
@@ -41,9 +42,14 @@ Get-ChildItem -Path $ContractsDir -Directory | ForEach-Object {
         try {
             cargo build --release --target wasm32-unknown-unknown
             
-            # Find the generated WASM file
-            $WasmFileName = $ContractName -replace "-", "_"
-            $WasmFile = Join-Path $ContractDir "target\wasm32-unknown-unknown\release\${WasmFileName}.wasm"
+            $PackageName = Select-String -Path $CargoToml -Pattern '^name = "(.*)"$' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1
+            if (-not $PackageName) {
+                Write-Host "    ✗ Failed to determine package name for $ContractName" -ForegroundColor Red
+                exit 1
+            }
+
+            $WasmFileName = $PackageName -replace "-", "_"
+            $WasmFile = Join-Path $WorkspaceTargetDir "${WasmFileName}.wasm"
             
             if (Test-Path $WasmFile) {
                 Copy-Item $WasmFile (Join-Path $WasmDir "${ContractName}.wasm")

@@ -24,8 +24,7 @@
     "smart-contract"
   ],
   "activationEvents": [
-    "onDebugResolve:soroban",
-    "onCommand:soroban-debugger.getProgramName"
+    "onDebugResolve:soroban"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -68,6 +67,10 @@
                 "type": "boolean",
                 "description": "Enable detailed trace logging",
                 "default": false
+              },
+              "binaryPath": {
+                "type": "string",
+                "description": "Optional path to the soroban-debug binary to launch"
               }
             }
           }
@@ -81,7 +84,8 @@
             "snapshotPath": "${workspaceFolder}/snapshot.json",
             "entrypoint": "main",
             "args": [],
-            "trace": false
+            "trace": false,
+            "binaryPath": "${workspaceFolder}/target/debug/soroban-debug"
           }
         ],
         "configurationSnippets": [
@@ -92,11 +96,12 @@
               "name": "Soroban: Debug Contract",
               "type": "soroban",
               "request": "launch",
-              "contractPath": "^\"\\${workspaceFolder}/target/wasm32-unknown-unknown/release/contract.wasm\"",
-              "snapshotPath": "^\"\\${workspaceFolder}/snapshot.json\"",
+              "contractPath": "${workspaceFolder}/target/wasm32-unknown-unknown/release/contract.wasm",
+              "snapshotPath": "${workspaceFolder}/snapshot.json",
               "entrypoint": "main",
               "args": [],
-              "trace": false
+              "trace": false,
+              "binaryPath": "${workspaceFolder}/target/debug/soroban-debug"
             }
           }
         ]
@@ -108,7 +113,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
-    "test": "node ./out/test/runTest.js",
+    "test": "node ./dist/test/runTest.js",
     "build": "npm run compile"
   },
   "devDependencies": {

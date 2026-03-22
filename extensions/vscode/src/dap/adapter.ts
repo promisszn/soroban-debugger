@@ -9,6 +9,8 @@ import { DebuggerProcess, DebuggerProcessConfig } from '../cli/debuggerProcess';
 import { DebuggerState, Variable } from './protocol';
 import { LogOutputEvent, LogLevel } from '@vscode/debugadapter/lib/logger';
 
+type LaunchRequestArgs = DebugProtocol.LaunchRequestArguments & DebuggerProcessConfig;
+
 export class SorobanDebugSession extends DebugSession {
   private debuggerProcess: DebuggerProcess | null = null;
   private state: DebuggerState = {
@@ -21,7 +23,8 @@ export class SorobanDebugSession extends DebugSession {
   private variableHandles = new Map<number, any>();
   private nextVarHandle = 1;
   private threadId = 1;
-  private rl: readline.Interface | null = null;
+  private outputReaders: readline.Interface[] = [];
+  private hasExecuted = false;
 
   protected initializeRequest(
     response: DebugProtocol.InitializeResponse,
@@ -42,7 +45,7 @@ export class SorobanDebugSession extends DebugSession {
 
   protected async launchRequest(
     response: DebugProtocol.LaunchResponse,
-    args: DebugProtocol.LaunchRequestArguments & DebuggerProcessConfig
+    args: LaunchRequestArgs
   ): Promise<void> {
     try {
       this.debuggerProcess = new DebuggerProcess({
@@ -50,11 +53,18 @@ export class SorobanDebugSession extends DebugSession {
         snapshotPath: args.snapshotPath,
         entrypoint: args.entrypoint || 'main',
         args: args.args || [],
-        trace: args.trace || false
+        trace: args.trace || false,
+        binaryPath: args.binaryPath,
+        port: args.port,
+        token: args.token
       });
 
       await this.debuggerProcess.start();
       this.state.isRunning = true;
+      this.state.isPaused = false;
+      this.hasExecuted = false;
+      this.variableHandles.clear();
+      this.nextVarHandle = 1;
 
       this.attachProcessListeners();
       this.sendResponse(response);
@@ -84,10 +94,11 @@ export class SorobanDebugSession extends DebugSession {
 
     response.body = {
       breakpoints: breakpoints.map(bp => ({
-        verified: true,
+        verified: false,
         line: bp.line,
         column: bp.column,
-        source: args.source
+        source: args.source,
+        message: 'Source breakpoints are not supported by the current Soroban debug backend'
       }))
     };
 
@@ -160,30 +171,49 @@ export class SorobanDebugSession extends DebugSession {
     response: DebugProtocol.ContinueResponse,
     args: DebugProtocol.ContinueArguments
   ): Promise<void> {
-    this.state.isPaused = false;
-    response.body = { allThreadsContinued: true };
-    this.sendResponse(response);
+    try {
+      if (!this.debuggerProcess) {
+        throw new Error('Debugger process is not running');
+      }
+
+      response.body = { allThreadsContinued: true };
+      this.sendResponse(response);
+
+      if (!this.hasExecuted) {
+        await this.runExecution('step');
+        return;
+      }
+
+      this.sendEvent(new ExitedEvent(0));
+      await this.stop();
+    } catch (error) {
+      this.sendErrorResponse(response, {
+        id: 1002,
+        format: `Continue failed: ${error}`,
+        showUser: true
+      });
+    }
   }
 
   protected async nextRequest(
     response: DebugProtocol.NextResponse,
     args: DebugProtocol.NextArguments
   ): Promise<void> {
-    this.sendResponse(response);
+    await this.stepOnce(response, 'next');
   }
 
   protected async stepInRequest(
     response: DebugProtocol.StepInResponse,
     args: DebugProtocol.StepInArguments
   ): Promise<void> {
-    this.sendResponse(response);
+    await this.stepOnce(response, 'step in');
   }
 
   protected async stepOutRequest(
     response: DebugProtocol.StepOutResponse,
     args: DebugProtocol.StepOutArguments
   ): Promise<void> {
-    this.sendResponse(response);
+    await this.stepOnce(response, 'step out');
   }
 
   protected async threadRequest(
@@ -202,6 +232,12 @@ export class SorobanDebugSession extends DebugSession {
     response: DebugProtocol.ConfigurationDoneResponse,
     args: DebugProtocol.ConfigurationDoneArguments
   ): Promise<void> {
+    if (this.debuggerProcess) {
+      await this.refreshState();
+      this.state.isPaused = true;
+      this.sendEvent(new StoppedEvent('entry', this.threadId));
+    }
+
     this.sendResponse(response);
   }
 
@@ -218,50 +254,107 @@ export class SorobanDebugSession extends DebugSession {
 
     const stdout = this.debuggerProcess.getOutputStream();
     if (stdout) {
-      this.rl = readline.createInterface({
+      const reader = readline.createInterface({
         input: stdout,
         crlfDelay: Infinity
       });
 
-      this.rl.on('line', (line: string) => {
-        this.handleDebuggerOutput(line);
+      reader.on('line', (line: string) => {
+        this.sendEvent(new LogOutputEvent(line + '\n', LogLevel.Log));
       });
+      this.outputReaders.push(reader);
     }
 
     const stderr = this.debuggerProcess.getErrorStream();
     if (stderr) {
-      stderr.on('data', (data: Buffer) => {
-        this.sendEvent(new LogOutputEvent(`${data}\n`, LogLevel.Error));
+      const reader = readline.createInterface({
+        input: stderr,
+        crlfDelay: Infinity
       });
+
+      reader.on('line', (line: string) => {
+        this.sendEvent(new LogOutputEvent(line + '\n', LogLevel.Error));
+      });
+      this.outputReaders.push(reader);
     }
   }
 
-  private handleDebuggerOutput(output: string): void {
-    try {
-      const event = JSON.parse(output);
-
-      if (event.type === 'breakpoint' || event.type === 'stopped') {
-        this.state.isPaused = true;
-        this.state.callStack = event.stackTrace || [];
-        this.state.variables = event.variables || [];
-
-        this.sendEvent(new StoppedEvent('breakpoint', this.threadId));
-      } else if (event.type === 'continued') {
-        this.state.isPaused = false;
-      } else if (event.type === 'exited') {
-        this.sendEvent(new ExitedEvent(event.exitCode || 0));
-      }
-    } catch {
-      // Not a JSON event, just log it
-      this.sendEvent(new LogOutputEvent(output + '\n', LogLevel.Log));
+  private async runExecution(reason: DebugProtocol.StoppedEvent['reason']): Promise<void> {
+    if (!this.debuggerProcess) {
+      throw new Error('Debugger process is not running');
     }
+
+    await this.debuggerProcess.execute();
+    this.hasExecuted = true;
+    await this.refreshState();
+    this.state.isPaused = true;
+    this.sendEvent(new StoppedEvent(reason, this.threadId));
+  }
+
+  private async stepOnce(
+    response:
+      | DebugProtocol.NextResponse
+      | DebugProtocol.StepInResponse
+      | DebugProtocol.StepOutResponse,
+    label: string
+  ): Promise<void> {
+    try {
+      if (!this.debuggerProcess) {
+        throw new Error('Debugger process is not running');
+      }
+
+      this.sendResponse(response);
+
+      if (!this.hasExecuted) {
+        await this.runExecution('step');
+        return;
+      }
+
+      await this.debuggerProcess.step();
+      await this.refreshState();
+      this.state.isPaused = true;
+      this.sendEvent(new StoppedEvent('step', this.threadId));
+    } catch (error) {
+      this.sendEvent(new LogOutputEvent(`${label} failed: ${error}\n`, LogLevel.Error));
+    }
+  }
+
+  private async refreshState(): Promise<void> {
+    if (!this.debuggerProcess) {
+      return;
+    }
+
+    const [inspection, storage] = await Promise.all([
+      this.debuggerProcess.inspect(),
+      this.debuggerProcess.getStorage()
+    ]);
+
+    this.state.callStack = inspection.callStack.map((frame, index) => ({
+      id: index + 1,
+      name: frame,
+      source: frame,
+      line: 1,
+      column: 1
+    }));
+    this.state.variables = this.storageToVariables(storage);
+  }
+
+  private storageToVariables(storage: Record<string, unknown>): Variable[] {
+    return Object.entries(storage)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, value]) => ({
+        name,
+        value: typeof value === 'string' ? value : JSON.stringify(value),
+        type: Array.isArray(value) ? 'array' : typeof value,
+        variablesReference: 0
+      }));
   }
 
   public async stop(): Promise<void> {
-    if (this.rl) {
-      this.rl.close();
-      this.rl = null;
+    for (const reader of this.outputReaders) {
+      reader.close();
     }
+    this.outputReaders = [];
 
     if (this.debuggerProcess) {
       await this.debuggerProcess.stop();
@@ -270,5 +363,8 @@ export class SorobanDebugSession extends DebugSession {
 
     this.state.isRunning = false;
     this.state.isPaused = false;
+    this.state.callStack = [];
+    this.state.variables = [];
+    this.hasExecuted = false;
   }
 }
