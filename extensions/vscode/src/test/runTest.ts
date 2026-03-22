@@ -56,7 +56,7 @@ async function main(): Promise<void> {
   await debuggerProcess.clearBreakpoint('increment');
 
   const result = await debuggerProcess.execute();
-  assert.match(result.output, /I64\(1\)/, 'Expected increment() to return I64(1)');
+  assert.match(result.output, /I64\(2\)/, 'Expected second increment() to return I64(2)');
 
   const inspection = await debuggerProcess.inspect();
   assert.ok(Array.isArray(inspection.callStack), 'Expected call stack array from inspection');
