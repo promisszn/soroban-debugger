@@ -240,7 +240,8 @@ fn assert_expected_events(
         ));
     }
 
-    for (index, (expected, actual)) in expected_events.iter().zip(actual_events.iter()).enumerate() {
+    for (index, (expected, actual)) in expected_events.iter().zip(actual_events.iter()).enumerate()
+    {
         if expected.contract_id.as_deref() != actual.contract_id.as_deref()
             || expected.topics != actual.topics
             || expected.data.trim() != actual.data.trim()
