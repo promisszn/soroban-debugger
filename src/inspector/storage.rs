@@ -153,6 +153,15 @@ impl StorageInspector {
         }
     }
 
+    /// Create a StorageInspector from an existing storage snapshot
+    pub fn with_state(storage: HashMap<String, String>) -> Self {
+        Self {
+            storage,
+            reads: HashMap::new(),
+            writes: HashMap::new(),
+        }
+    }
+
     /// Get all storage entries
     pub fn get_all(&self) -> &HashMap<String, String> {
         &self.storage
