@@ -66,7 +66,7 @@ Successfully implemented parallel batch contract execution feature for the Sorob
 
 - Added `pub mod batch;` to expose batch module
 
-#### `Readme.md`
+#### `README.md`
 
 - Added "Parallel batch execution for regression testing" to features list
 - Added batch execution section with usage examples
@@ -171,7 +171,7 @@ The feature is complete and ready for:
 
 ```
 modified:   Cargo.toml
-modified:   Readme.md
+modified:   README.md
 new file:   docs/batch-execution.md
 new file:   examples/batch_args.json
 new file:   src/batch.rs
