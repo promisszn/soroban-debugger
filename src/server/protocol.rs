@@ -16,8 +16,11 @@ pub enum DebugRequest {
         args: Option<String>,
     },
 
-    /// Step execution
+    /// Step execution (instruction-level)
     Step,
+
+    /// Step over to next source line in the same frame
+    StepOverLine,
 
     /// Continue execution
     Continue,
@@ -78,6 +81,14 @@ pub enum DebugResponse {
         paused: bool,
         current_function: Option<String>,
         step_count: u64,
+    },
+
+    /// Source-level step-over result
+    StepOverLineResult {
+        paused: bool,
+        file: Option<String>,
+        line: Option<u32>,
+        column: Option<u32>,
     },
 
     /// Continue result

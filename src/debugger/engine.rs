@@ -1,5 +1,6 @@
 use crate::debugger::breakpoint::BreakpointManager;
 use crate::debugger::instruction_pointer::StepMode;
+use crate::debugger::source_map::{SourceLocation, SourceMap};
 use crate::debugger::state::DebugState;
 use crate::debugger::stepper::Stepper;
 use crate::runtime::executor::ContractExecutor;
@@ -9,6 +10,11 @@ use crate::Result;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
+pub struct StepOverResult {
+    pub paused: bool,
+    pub location: Option<SourceLocation>,
+}
+
 /// Core debugging engine that orchestrates execution and debugging.
 pub struct DebuggerEngine {
     executor: ContractExecutor,
@@ -16,6 +22,7 @@ pub struct DebuggerEngine {
     state: Arc<Mutex<DebugState>>,
     stepper: Stepper,
     instrumenter: Instrumenter,
+    source_map: SourceMap,
     paused: bool,
     instruction_debug_enabled: bool,
 }
@@ -37,6 +44,7 @@ impl DebuggerEngine {
             state: Arc::new(Mutex::new(DebugState::new())),
             stepper: Stepper::new(),
             instrumenter: Instrumenter::new(),
+            source_map: SourceMap::new(),
             paused: false,
             instruction_debug_enabled: false,
         }
@@ -58,6 +66,10 @@ impl DebuggerEngine {
         self.instrumenter.enable();
         self.instruction_debug_enabled = true;
         Ok(())
+    }
+
+    pub fn load_source_map(&mut self, wasm_bytes: &[u8]) -> Result<()> {
+        self.source_map.load(wasm_bytes)
     }
 
     /// Disable instruction-level debugging.
@@ -175,6 +187,27 @@ impl DebuggerEngine {
         };
         self.paused = stepped;
         Ok(stepped)
+    }
+
+    pub fn step_over_source_line(&mut self) -> Result<StepOverResult> {
+        if !self.instruction_debug_enabled {
+            return Err(miette::miette!("Instruction debugging not enabled"));
+        }
+
+        let (paused, location) = if let Ok(mut state) = self.state.lock() {
+            let advanced = self
+                .stepper
+                .step_over_source_line(&mut state, &self.source_map);
+            let loc = state
+                .current_instruction()
+                .and_then(|i| self.source_map.lookup(i.offset));
+            (advanced, loc)
+        } else {
+            (false, None)
+        };
+
+        self.paused = paused;
+        Ok(StepOverResult { paused, location })
     }
 
     /// Step out of current function.

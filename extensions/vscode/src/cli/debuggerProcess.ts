@@ -58,6 +58,48 @@ export class DebuggerProcess {
     });
   }
 
+  sendCommand(command: any): Promise<any> {
+    return new Promise((resolve, reject) => {
+      if (!this.process || !this.process.stdin || !this.process.stdout) {
+        reject(new Error('Debugger process not running'));
+        return;
+      }
+
+      const input = JSON.stringify({
+        id: Math.floor(Math.random() * 1000000),
+        request: command
+      }) + '\n';
+
+      const listener = (data: Buffer) => {
+        const lines = data.toString().split('\n');
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const response = JSON.parse(line);
+            if (response.response && response.response.type === command.type + 'Result') {
+              this.process!.stdout!.removeListener('data', listener);
+              resolve(response.response);
+              return;
+            }
+          } catch (e) {
+            // ignore non-json
+          }
+        }
+      };
+
+      this.process.stdout.on('data', listener);
+      this.process.stdin.write(input);
+      
+      // Timeout after 10s
+      setTimeout(() => {
+        if (this.process && this.process.stdout) {
+          this.process.stdout.removeListener('data', listener);
+        }
+        reject(new Error('Command timeout'));
+      }, 10000);
+    });
+  }
+
   getInputStream() {
     return this.process?.stdin;
   }

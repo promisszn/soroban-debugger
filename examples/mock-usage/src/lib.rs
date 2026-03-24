@@ -6,7 +6,7 @@ pub struct MockableContract;
 
 #[contractimpl]
 impl MockableContract {
-    pub fn hello(env: Env, name: Symbol) -> Symbol {
+    pub fn hello(env: Env, _name: Symbol) -> Symbol {
         let prefix: Symbol = env
             .storage()
             .instance()

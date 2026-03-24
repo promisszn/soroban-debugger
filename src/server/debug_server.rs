@@ -1,4 +1,4 @@
-use crate::debugger::engine::DebuggerEngine;
+use crate::debugger::engine::{DebuggerEngine, StepOverResult};
 use crate::runtime::executor::ContractExecutor;
 use crate::server::protocol::{DebugMessage, DebugRequest, DebugResponse};
 use crate::simulator::SnapshotLoader;
@@ -293,6 +293,34 @@ impl DebugServer {
                         }
                         Err(e) => DebugResponse::Error {
                             message: format!("Step failed: {}", e),
+                        },
+                    }
+                } else {
+                    DebugResponse::Error {
+                        message: "No contract loaded".to_string(),
+                    }
+                }
+            }
+
+            DebugRequest::StepOverLine => {
+                if let Some(engine) = &session.engine {
+                    let mut engine = engine.lock().map_err(|e| {
+                        DebuggerError::ExecutionError(format!("Failed to lock engine: {}", e))
+                    })?;
+
+                    match engine.step_over_source_line() {
+                        Ok(StepOverResult { paused, location }) => {
+                            DebugResponse::StepOverLineResult {
+                                paused,
+                                file: location
+                                    .as_ref()
+                                    .map(|l| l.file.to_string_lossy().into_owned()),
+                                line: location.as_ref().map(|l| l.line),
+                                column: location.and_then(|l| l.column),
+                            }
+                        }
+                        Err(e) => DebugResponse::Error {
+                            message: format!("StepOverLine failed: {}", e),
                         },
                     }
                 } else {

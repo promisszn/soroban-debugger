@@ -172,7 +172,25 @@ export class SorobanDebugSession extends DebugSession {
     response: DebugProtocol.NextResponse,
     args: DebugProtocol.NextArguments
   ): Promise<void> {
-    this.sendResponse(response);
+    if (!this.debuggerProcess) {
+      this.sendResponse(response);
+      return;
+    }
+
+    try {
+      const result = await this.debuggerProcess.sendCommand({
+        type: 'StepOverLine'
+      });
+      
+      this.sendResponse(response);
+
+      if (result && result.paused) {
+        this.state.isPaused = true;
+        this.sendEvent(new StoppedEvent('step', this.threadId));
+      }
+    } catch (e) {
+      this.sendResponse(response);
+    }
   }
 
   protected async stepInRequest(
