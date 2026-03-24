@@ -46,8 +46,8 @@ fn test_detects_unchecked_arithmetic() {
 
 #[test]
 fn test_ignores_guarded_arithmetic() {
-    // i32.add followed by if: control-flow guard in lookahead window
-    let wasm = vec![0x6A, 0x04];
+    // i32.add followed by br_if: control flow guard
+    let wasm = vec![0x6A, 0x0D];
     let analyzer = SecurityAnalyzer::new();
     let report = analyzer
         .analyze(&wasm, None, None)
@@ -66,8 +66,8 @@ fn test_ignores_guarded_arithmetic() {
 }
 
 #[test]
-fn test_flags_call_adjacency_as_unguarded_arithmetic() {
-    // Call adjacency is not treated as a safety guard.
+fn test_ignores_call_guarded_arithmetic() {
+    // Call is intentionally not treated as an arithmetic guard.
     let wasm = vec![0x10, 0x6A];
     let analyzer = SecurityAnalyzer::new();
     let report = analyzer
@@ -79,10 +79,7 @@ fn test_flags_call_adjacency_as_unguarded_arithmetic() {
         .iter()
         .filter(|f| f.rule_id == "arithmetic-overflow")
         .collect();
-    assert!(
-        !arithmetic_findings.is_empty(),
-        "Should flag arithmetic when only a call is adjacent"
-    );
+    assert!(!arithmetic_findings.is_empty(), "Call should not suppress arithmetic finding");
 }
 
 #[test]

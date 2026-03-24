@@ -717,16 +717,11 @@ mod tests {
     /// the wrong CRC — the rule must NOT fire for them.
     #[test]
     fn strkey_rejects_wrong_checksum() {
-        // "GAAA…AAA" — right length, right prefix, but the 56 A's don't encode a
-        // valid (payload + CRC) pair.
-        let fake = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        // Length sanity
-        assert!(fake.len() >= 56); // deliberately over-long; trim to 56
-        let fake56 = &fake[..56];
-        assert!(
-            !is_valid_strkey(fake56),
-            "all-A token must be rejected (bad CRC)"
-        );
+        // Build exactly 56 chars: 'G' + 55 'A's.
+        // It has a valid prefix/length but an invalid payload+CRC combination.
+        let fake = format!("G{}", "A".repeat(55));
+        assert_eq!(fake.len(), 56);
+        assert!(!is_valid_strkey(&fake), "all-A token must be rejected (bad CRC)");
     }
 
     /// A string that is 56 chars, starts with 'G', but contains characters
@@ -740,11 +735,7 @@ mod tests {
                                          // Craft exactly 56 chars with an invalid char ('0') at position 1.
         let with_zero = "G0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         assert_eq!(with_zero.len(), 56);
-        let with_zero56 = &with_zero[..56];
-        assert!(
-            !is_valid_strkey(with_zero56),
-            "token with '0' must be rejected"
-        );
+        assert!(!is_valid_strkey(with_zero), "token with '0' must be rejected");
     }
 
     /// Strings shorter or longer than 56 characters must always be rejected,
@@ -937,8 +928,12 @@ mod tests {
     /// intermediate instruction between) is still a valid guard.
     #[test]
     fn is_guarded_true_for_brif_within_lookahead_window() {
-        // e.g.: i32.add  ->  (some instruction)  ->  br_if
-        let instrs = vec![WasmInstruction::I32Add, WasmInstruction::Call, WasmInstruction::BrIf];
+        // e.g.: i32.add  ->  i32.const (compare setup)  ->  br_if
+        let instrs = vec![
+            WasmInstruction::I32Add,
+            WasmInstruction::Unknown(0x41),
+            WasmInstruction::BrIf,
+        ];
         assert!(ArithmeticCheckRule::is_guarded(&instrs, 0));
     }
 
@@ -949,11 +944,11 @@ mod tests {
         // idx=0, window covers idx+1..idx+4 (indices 1, 2, 3).
         // BrIf is at index 4, which is outside the window.
         let instrs = vec![
-            WasmInstruction::I32Add, // idx 0
-            WasmInstruction::Call, // idx 1 - use Call instead of I32Const
-            WasmInstruction::Call, // idx 2 - use Call instead of I32Const
-            WasmInstruction::Call, // idx 3 - use Call instead of I32Const
-            WasmInstruction::BrIf // idx 4 — outside window
+            WasmInstruction::I32Add,   // idx 0
+            WasmInstruction::Unknown(0x41), // idx 1
+            WasmInstruction::Unknown(0x41), // idx 2
+            WasmInstruction::Unknown(0x41), // idx 3
+            WasmInstruction::BrIf,     // idx 4 — outside window
         ];
         assert!(!ArithmeticCheckRule::is_guarded(&instrs, 0));
     }
@@ -1000,7 +995,7 @@ mod tests {
     /// must be reported as unguarded (no instructions ahead to look at).
     #[test]
     fn is_guarded_false_at_end_of_slice() {
-        let instrs = vec![WasmInstruction::Call, WasmInstruction::I64Add];
+        let instrs = vec![WasmInstruction::Unknown(0x41), WasmInstruction::I64Add];
         assert!(!ArithmeticCheckRule::is_guarded(&instrs, 1));
     }
 
