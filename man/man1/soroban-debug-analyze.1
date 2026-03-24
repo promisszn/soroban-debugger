@@ -4,7 +4,7 @@
 .SH NAME
 analyze \- Analyze contract for security vulnerabilities
 .SH SYNOPSIS
-\fBanalyze\fR <\fB\-c\fR|\fB\-\-contract\fR> [\fB\-f\fR|\fB\-\-function\fR] [\fB\-a\fR|\fB\-\-args\fR] [\fB\-s\fR|\fB\-\-storage\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBanalyze\fR <\fB\-c\fR|\fB\-\-contract\fR> [\fB\-f\fR|\fB\-\-function\fR] [\fB\-a\fR|\fB\-\-args\fR] [\fB\-s\fR|\fB\-\-storage\fR] [\fB\-\-timeout\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Analyze contract for security vulnerabilities
 .SH OPTIONS
@@ -20,6 +20,9 @@ Function arguments as JSON array for dynamic analysis (optional)
 .TP
 \fB\-s\fR, \fB\-\-storage\fR \fI<STORAGE>\fR
 Initial storage state as JSON object (optional)
+.TP
+\fB\-\-timeout\fR \fI<TIMEOUT>\fR [default: 30]
+Execution timeout in seconds for dynamic analysis (default: 30)
 .TP
 \fB\-\-format\fR \fI<FORMAT>\fR [default: text]
 Output format (text, json)

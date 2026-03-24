@@ -17,6 +17,7 @@ use crate::{DebuggerError, Result};
 
 use soroban_env_host::Host;
 use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::Ledger as _;
 use soroban_sdk::{Address, Env};
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -38,6 +39,8 @@ pub struct ContractExecutor {
     timeout_secs: u64,
     error_db: crate::debugger::error_db::ErrorDatabase,
     debug_env: DebugEnv,
+    /// Accumulated CPU instruction deltas keyed by function name.
+    per_function_cpu: HashMap<String, u64>,
 }
 
 impl ContractExecutor {
@@ -55,6 +58,7 @@ impl ContractExecutor {
             timeout_secs: 30,
             error_db: loaded.error_db,
             debug_env: DebugEnv::new(),
+            per_function_cpu: HashMap::new(),
         })
     }
 
@@ -141,6 +145,10 @@ impl ContractExecutor {
             None::<&str>,
         );
 
+        *self
+            .per_function_cpu
+            .entry(function.to_string())
+            .or_insert(0) += record.budget.cpu_instructions;
         self.last_execution = Some(record);
         Ok(display)
     }
@@ -367,6 +375,35 @@ impl ContractExecutor {
 
         Ok(())
     }
+    /// Apply ledger metadata (sequence, timestamp, network ID) from a network snapshot.
+    pub fn apply_snapshot_ledger(
+        &mut self,
+        snapshot: &crate::simulator::LoadedSnapshot,
+    ) -> Result<()> {
+        use sha2::{Digest, Sha256};
+
+        let seq = snapshot.ledger_sequence();
+        let ts = snapshot.snapshot().ledger.timestamp;
+        let passphrase = snapshot.network_passphrase();
+
+        let mut hasher = Sha256::new();
+        hasher.update(passphrase.as_bytes());
+        let network_id: [u8; 32] = hasher.finalize().into();
+
+        self.env.ledger().with_mut(|l| {
+            l.sequence_number = seq;
+            l.timestamp = ts;
+            l.network_id = network_id;
+        });
+
+        info!(
+            "Applied snapshot ledger state: sequence={}, timestamp={}",
+            seq, ts
+        );
+
+        Ok(())
+    }
+
     pub fn set_mock_specs(&mut self, specs: &[String]) -> Result<()> {
         let registry = MockRegistry::from_cli_specs(&self.env, specs)?;
         self.set_mock_registry(registry)
@@ -382,9 +419,16 @@ impl ContractExecutor {
             .unwrap_or_default()
     }
     pub fn get_instruction_counts(&self) -> Result<InstructionCounts> {
+        let mut function_counts: Vec<(String, u64)> = self
+            .per_function_cpu
+            .iter()
+            .map(|(name, &cpu)| (name.clone(), cpu))
+            .collect();
+        function_counts.sort_by(|a, b| b.1.cmp(&a.1));
+        let total = function_counts.iter().map(|(_, c)| c).sum();
         Ok(InstructionCounts {
-            function_counts: Vec::new(),
-            total: 0,
+            function_counts,
+            total,
         })
     }
     pub fn host(&self) -> &Host {
