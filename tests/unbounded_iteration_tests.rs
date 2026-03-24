@@ -208,10 +208,10 @@ fn has_unbounded_iteration_finding(wasm: &[u8]) -> bool {
 
 fn get_unbounded_iteration_finding(
     wasm: &[u8]
-) -> Option<&soroban_debugger::analyzer::security::SecurityFinding> {
+) -> Option<soroban_debugger::analyzer::security::SecurityFinding> {
     let analyzer = SecurityAnalyzer::new();
     let report = analyzer.analyze(wasm, None, None).expect("analysis failed");
-    report.findings.iter().find(|f| f.rule_id == "unbounded-iteration")
+    report.findings.into_iter().find(|f| f.rule_id == "unbounded-iteration")
 }
 
 #[test]
@@ -305,7 +305,6 @@ fn provides_rich_context_in_findings() {
     assert!(context.control_flow_info.is_some());
     let cf_info = context.control_flow_info.as_ref().unwrap();
     assert!(!cf_info.loop_types.is_empty());
-    assert!(cf_info.conditional_branches >= 0);
 
     // Check storage call pattern
     assert!(context.storage_call_pattern.is_some());

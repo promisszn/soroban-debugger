@@ -3,7 +3,7 @@
 //! This example shows how the enhanced security analyzer can detect
 //! storage-driven loops with improved precision and confidence scoring.
 
-use soroban_debugger::analyzer::security::{SecurityAnalyzer, ConfidenceLevel};
+use soroban_debugger::analyzer::security::SecurityAnalyzer;
 
 fn main() {
     println!("Testing improved unbounded iteration detection...");

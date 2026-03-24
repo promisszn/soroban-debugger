@@ -6,7 +6,7 @@ use serde::{ Deserialize, Serialize };
 use std::collections::{ HashMap, HashSet };
 use wasmparser::{ Operator, Parser, Payload };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Severity {
     Low,
     Medium,
@@ -30,7 +30,7 @@ pub struct FindingConfidence {
     pub rationale: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConfidenceLevel {
     Low,
     Medium,
@@ -71,7 +71,7 @@ pub trait SecurityRule {
     }
     fn analyze_dynamic(
         &self,
-        _executor: &ContractExecutor,
+        _executor: Option<&ContractExecutor>,
         _trace: &[DynamicTraceEvent]
     ) -> Result<Vec<SecurityFinding>> {
         Ok(vec![])
@@ -108,8 +108,8 @@ impl SecurityAnalyzer {
             let static_findings = rule.analyze_static(wasm_bytes)?;
             report.findings.extend(static_findings);
 
-            if let (Some(exec), Some(tr)) = (executor, trace) {
-                let dynamic_findings = rule.analyze_dynamic(exec, tr)?;
+            if let Some(tr) = trace {
+                let dynamic_findings = rule.analyze_dynamic(executor, tr)?;
                 report.findings.extend(dynamic_findings);
             }
         }
@@ -336,7 +336,7 @@ impl SecurityRule for AuthorizationCheckRule {
 
     fn analyze_dynamic(
         &self,
-        _executor: &ContractExecutor,
+        _executor: Option<&ContractExecutor>,
         trace: &[DynamicTraceEvent]
     ) -> Result<Vec<SecurityFinding>> {
         let mut findings = Vec::new();
@@ -379,7 +379,7 @@ impl SecurityRule for ReentrancyPatternRule {
 
     fn analyze_dynamic(
         &self,
-        _executor: &ContractExecutor,
+        _executor: Option<&ContractExecutor>,
         trace: &[DynamicTraceEvent]
     ) -> Result<Vec<SecurityFinding>> {
         Ok(analyze_reentrancy_dynamic(trace))
@@ -585,7 +585,7 @@ impl SecurityRule for UnboundedIterationRule {
 
     fn analyze_dynamic(
         &self,
-        _executor: &ContractExecutor,
+        _executor: Option<&ContractExecutor>,
         trace: &[DynamicTraceEvent]
     ) -> Result<Vec<SecurityFinding>> {
         Ok(
@@ -614,14 +614,9 @@ struct UnboundedStaticSignal {
 enum ControlFlowFrame {
     Loop {
         loop_type: String,
-        depth: usize,
     },
-    Block {
-        block_type: String,
-    },
-    If {
-        has_else: bool,
-    },
+    Block,
+    If,
 }
 
 impl ControlFlowFrame {
@@ -692,35 +687,21 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
 
                             control_flow_stack.push(ControlFlowFrame::Loop {
                                 loop_type: loop_type.clone(),
-                                depth: current_depth,
                             });
                             signal.max_nesting_depth = signal.max_nesting_depth.max(
                                 current_depth + 1
                             );
                         }
                         Operator::Block { .. } => {
-                            control_flow_stack.push(ControlFlowFrame::Block {
-                                block_type: "block".to_string(),
-                            });
+                            control_flow_stack.push(ControlFlowFrame::Block);
                         }
                         Operator::If { .. } => {
                             conditional_branches += 1;
-                            control_flow_stack.push(ControlFlowFrame::If { has_else: false });
+                            control_flow_stack.push(ControlFlowFrame::If);
                         }
-                        Operator::Else => {
-                            if let Some(frame) = control_flow_stack.last_mut() {
-                                if let ControlFlowFrame::If { .. } = frame {
-                                    *frame = ControlFlowFrame::If { has_else: true };
-                                }
-                            }
-                        }
+                        Operator::Else => {}
                         Operator::End => {
-                            if let Some(frame) = control_flow_stack.pop() {
-                                if frame.is_loop() {
-                                    signal.max_nesting_depth =
-                                        signal.max_nesting_depth.saturating_sub(1);
-                                }
-                            }
+                            control_flow_stack.pop();
                         }
                         Operator::Call { function_index } => {
                             let is_storage_call = storage_import_indices.contains(&function_index);
@@ -763,7 +744,7 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
 
     // Calculate confidence based on multiple factors
     let confidence_level = if storage_calls_in_loops > 0 {
-        if signal.max_nesting_depth > 2 && storage_calls_in_loops > 3 {
+        if signal.max_nesting_depth >= 2 && storage_calls_in_loops >= 3 {
             ConfidenceLevel::High
         } else if signal.max_nesting_depth > 1 || storage_calls_in_loops > 1 {
             ConfidenceLevel::Medium
@@ -823,6 +804,10 @@ fn is_storage_read_import(module: &str, name: &str) -> bool {
     let n = canonicalize_ascii(name);
     for base in BASES {
         if n == *base {
+            return true;
+        }
+        // Handle prefix-qualified names like "contract_storage_get" or "soroban_storage_has"
+        if n.ends_with(base) {
             return true;
         }
         if n.starts_with(base) {
