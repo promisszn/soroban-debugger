@@ -37,18 +37,3 @@ Show cross\-contract dependency graph in specified format
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
-.SH EXAMPLES
-Display exported functions in pretty format (default):
-.RS 4
-\fBsoroban-debug inspect --contract mycontract.wasm --functions\fR
-.RE
-.PP
-Export functions as JSON for machine-readable output:
-.RS 4
-\fBsoroban-debug inspect --contract mycontract.wasm --functions --format json\fR
-.RE
-.PP
-Export all contract information including metadata as JSON:
-.RS 4
-\fBsoroban-debug inspect --contract mycontract.wasm --format json\fR
-.RE
