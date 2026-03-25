@@ -33,7 +33,9 @@ fn symbolic_runs_against_counter_fixture() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Function: increment"))
-        .stdout(predicate::str::contains("Paths explored:"));
+        .stdout(predicate::str::contains("Paths explored:"))
+        .stdout(predicate::str::contains("Budget:"))
+        .stdout(predicate::str::contains("Truncation:"));
 }
 
 #[test]
@@ -55,8 +57,39 @@ fn symbolic_writes_scenario_toml() {
         .success();
 
     let written = fs::read_to_string(output.path()).unwrap();
+    assert!(written.contains("[metadata]"));
     assert!(written.contains("[[scenario]]"));
     assert!(written.contains("function = \"increment\""));
+}
+
+#[test]
+fn symbolic_cli_honors_caps_and_reports_truncation() {
+    let wasm = fixture_wasm("budget_heavy");
+
+    base_cmd()
+        .args([
+            "symbolic",
+            "--contract",
+            wasm.to_str().unwrap(),
+            "--function",
+            "heavy",
+            "--profile",
+            "fast",
+            "--input-combination-cap",
+            "4",
+            "--path-cap",
+            "2",
+            "--timeout",
+            "30",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Budget: path_cap=2, input_combination_cap=4, timeout=30s",
+        ))
+        .stdout(predicate::str::contains("Truncation:"))
+        .stdout(predicate::str::contains("input combination cap reached"))
+        .stdout(predicate::str::contains("path exploration cap reached"));
 }
 
 #[test]
@@ -397,6 +430,36 @@ fn repl_seeds_initial_storage() {
     assert!(
         combined.contains("Result: I64(42)"),
         "Storage was not seeded correctly in REPL\n{}",
+        combined
+    );
+}
+
+#[test]
+fn repl_supports_conditional_breakpoints() {
+    let wasm = fixture_wasm("counter");
+    let output = Command::new(env!("CARGO_BIN_EXE_soroban-debug"))
+        .env("NO_COLOR", "1")
+        .env("RUST_LOG", "info")
+        .args(["repl", "--contract", wasm.to_str().unwrap()])
+        .write_stdin("break increment step_count > 0\ncall increment\ncall increment\nexit\n")
+        .output()
+        .unwrap();
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        combined.contains("Breakpoint set") && combined.contains("increment"),
+        "Breakpoint was not set correctly in REPL\n{}",
+        combined
+    );
+
+    assert!(
+        combined.contains("Execution paused") && combined.contains("increment"),
+        "Conditional breakpoint was not hit in REPL\n{}",
         combined
     );
 }

@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::cmp;
 use std::collections::HashSet;
 use std::fmt::Write;
+use std::time::Instant;
 use wasmparser::{Parser, Payload};
 
 #[derive(Debug, Clone, Serialize)]
@@ -19,6 +20,64 @@ pub struct SymbolicReport {
     pub paths_explored: usize,
     pub panics_found: usize,
     pub paths: Vec<PathResult>,
+    pub metadata: SymbolicReportMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SymbolicConfig {
+    pub max_paths: usize,
+    pub max_input_combinations: usize,
+    pub timeout_secs: u64,
+}
+
+impl Default for SymbolicConfig {
+    fn default() -> Self {
+        Self::balanced()
+    }
+}
+
+impl SymbolicConfig {
+    pub const fn fast() -> Self {
+        Self {
+            max_paths: 25,
+            max_input_combinations: 64,
+            timeout_secs: 5,
+        }
+    }
+
+    pub const fn balanced() -> Self {
+        Self {
+            max_paths: 100,
+            max_input_combinations: 256,
+            timeout_secs: 30,
+        }
+    }
+
+    pub const fn deep() -> Self {
+        Self {
+            max_paths: 500,
+            max_input_combinations: 2048,
+            timeout_secs: 120,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SymbolicReportMetadata {
+    pub config: SymbolicConfig,
+    pub generated_input_combinations: usize,
+    pub attempted_input_combinations: usize,
+    pub distinct_paths_recorded: usize,
+    pub truncated_by_input_cap: bool,
+    pub truncated_by_path_cap: bool,
+    pub truncated_by_timeout: bool,
+    pub truncation_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct GeneratedInputs {
+    combinations: Vec<String>,
+    truncated_by_input_cap: bool,
 }
 
 #[derive(Default)]
@@ -59,21 +118,53 @@ impl SymbolicAnalyzer {
     }
 
     pub fn analyze(&self, wasm: &[u8], function: &str) -> Result<SymbolicReport> {
+        self.analyze_with_config(wasm, function, &SymbolicConfig::default())
+    }
+
+    pub fn analyze_with_config(
+        &self,
+        wasm: &[u8],
+        function: &str,
+        config: &SymbolicConfig,
+    ) -> Result<SymbolicReport> {
         let arg_count = self.get_arg_count(wasm, function).unwrap_or(0);
-        let combinations = self.generate_input_combinations(arg_count);
+        let generated_inputs =
+            self.generate_input_combinations(arg_count, config.max_input_combinations);
+        let deadline = Instant::now();
 
         let mut report = SymbolicReport {
             function: function.to_string(),
             paths_explored: 0,
             panics_found: 0,
             paths: Vec::new(),
+            metadata: SymbolicReportMetadata {
+                config: config.clone(),
+                generated_input_combinations: generated_inputs.combinations.len(),
+                attempted_input_combinations: 0,
+                distinct_paths_recorded: 0,
+                truncated_by_input_cap: generated_inputs.truncated_by_input_cap,
+                truncated_by_path_cap: false,
+                truncated_by_timeout: false,
+                truncation_reasons: Vec::new(),
+            },
         };
 
         let mut seen_inputs = HashSet::new();
 
-        for args_json in combinations.iter().take(100) {
+        for args_json in &generated_inputs.combinations {
+            if report.paths_explored >= config.max_paths {
+                report.metadata.truncated_by_path_cap = true;
+                break;
+            }
+
+            if config.timeout_secs > 0 && deadline.elapsed().as_secs() >= config.timeout_secs {
+                report.metadata.truncated_by_timeout = true;
+                break;
+            }
+
             let executor_res = std::panic::catch_unwind(|| {
                 if let Ok(mut executor) = ContractExecutor::new(wasm.to_vec()) {
+                    executor.set_timeout(config.timeout_secs);
                     executor.execute(function, Some(args_json))
                 } else {
                     Err(crate::DebuggerError::ExecutionError("Init fail".into()).into())
@@ -102,6 +193,27 @@ impl SymbolicAnalyzer {
                 }
             }
             report.paths_explored += 1;
+        }
+
+        report.metadata.attempted_input_combinations = report.paths_explored;
+        report.metadata.distinct_paths_recorded = report.paths.len();
+        if report.metadata.truncated_by_input_cap {
+            report.metadata.truncation_reasons.push(format!(
+                "input combination cap reached at {} generated combinations",
+                config.max_input_combinations
+            ));
+        }
+        if report.metadata.truncated_by_path_cap {
+            report.metadata.truncation_reasons.push(format!(
+                "path exploration cap reached at {} attempted inputs",
+                config.max_paths
+            ));
+        }
+        if report.metadata.truncated_by_timeout {
+            report.metadata.truncation_reasons.push(format!(
+                "symbolic analysis timed out after {} seconds",
+                config.timeout_secs
+            ));
         }
 
         Ok(report)
@@ -193,31 +305,58 @@ impl SymbolicAnalyzer {
         )
     }
 
-    fn generate_input_combinations(&self, arg_count: usize) -> Vec<String> {
+    fn generate_input_combinations(&self, arg_count: usize, max_cases: usize) -> GeneratedInputs {
         // Values representing symbolic extremes
         let values = vec!["0", "1", "-1", "42", "2147483647", "-2147483648"];
-        const MAX_CASES: usize = 256;
+
+        if max_cases == 0 {
+            return GeneratedInputs {
+                combinations: Vec::new(),
+                truncated_by_input_cap: true,
+            };
+        }
 
         let mut combinations = Vec::new();
         if arg_count == 0 {
             combinations.push("[]".to_string());
-            return combinations;
+            return GeneratedInputs {
+                combinations,
+                truncated_by_input_cap: false,
+            };
         }
 
         if arg_count == 1 {
             for v in &values {
+                if combinations.len() >= max_cases {
+                    return GeneratedInputs {
+                        combinations,
+                        truncated_by_input_cap: true,
+                    };
+                }
                 combinations.push(format!("[{}]", v));
             }
-            return combinations;
+            return GeneratedInputs {
+                combinations,
+                truncated_by_input_cap: false,
+            };
         }
 
         if arg_count == 2 {
             for v1 in &values {
                 for v2 in &values {
+                    if combinations.len() >= max_cases {
+                        return GeneratedInputs {
+                            combinations,
+                            truncated_by_input_cap: true,
+                        };
+                    }
                     combinations.push(format!("[{}, {}]", v1, v2));
                 }
             }
-            return combinations;
+            return GeneratedInputs {
+                combinations,
+                truncated_by_input_cap: false,
+            };
         }
 
         // Generic cartesian product for 3+ args with a capped exploration budget.
@@ -232,8 +371,11 @@ impl SymbolicAnalyzer {
                 .join(", ");
             combinations.push(format!("[{}]", args));
 
-            if combinations.len() >= MAX_CASES {
-                break;
+            if combinations.len() >= max_cases {
+                return GeneratedInputs {
+                    combinations,
+                    truncated_by_input_cap: true,
+                };
             }
 
             let mut carry = true;
@@ -251,7 +393,10 @@ impl SymbolicAnalyzer {
                 break;
             }
         }
-        combinations
+        GeneratedInputs {
+            combinations,
+            truncated_by_input_cap: false,
+        }
     }
 
     pub fn generate_scenario_toml(&self, report: &SymbolicReport) -> String {
@@ -260,6 +405,64 @@ impl SymbolicAnalyzer {
         writeln!(toml, "function = {}", toml_basic_string(&report.function)).unwrap();
         writeln!(toml, "paths_explored = {}", report.paths_explored).unwrap();
         writeln!(toml, "panics_found = {}\n", report.panics_found).unwrap();
+        writeln!(toml, "[metadata]").unwrap();
+        writeln!(toml, "max_paths = {}", report.metadata.config.max_paths).unwrap();
+        writeln!(
+            toml,
+            "max_input_combinations = {}",
+            report.metadata.config.max_input_combinations
+        )
+        .unwrap();
+        writeln!(
+            toml,
+            "timeout_secs = {}",
+            report.metadata.config.timeout_secs
+        )
+        .unwrap();
+        writeln!(
+            toml,
+            "generated_input_combinations = {}",
+            report.metadata.generated_input_combinations
+        )
+        .unwrap();
+        writeln!(
+            toml,
+            "attempted_input_combinations = {}",
+            report.metadata.attempted_input_combinations
+        )
+        .unwrap();
+        writeln!(
+            toml,
+            "distinct_paths_recorded = {}",
+            report.metadata.distinct_paths_recorded
+        )
+        .unwrap();
+        writeln!(
+            toml,
+            "truncated_by_input_cap = {}",
+            report.metadata.truncated_by_input_cap
+        )
+        .unwrap();
+        writeln!(
+            toml,
+            "truncated_by_path_cap = {}",
+            report.metadata.truncated_by_path_cap
+        )
+        .unwrap();
+        writeln!(
+            toml,
+            "truncated_by_timeout = {}",
+            report.metadata.truncated_by_timeout
+        )
+        .unwrap();
+        if !report.metadata.truncation_reasons.is_empty() {
+            writeln!(toml, "truncation_reasons = [").unwrap();
+            for reason in &report.metadata.truncation_reasons {
+                writeln!(toml, "  {},", toml_basic_string(reason)).unwrap();
+            }
+            writeln!(toml, "]").unwrap();
+        }
+        writeln!(toml).unwrap();
 
         for (i, path) in report.paths.iter().enumerate() {
             writeln!(toml, "[[scenario]]").unwrap();
@@ -377,6 +580,16 @@ mod tests {
             paths_explored: 0,
             panics_found: 0,
             paths: Vec::new(),
+            metadata: SymbolicReportMetadata {
+                config: SymbolicConfig::default(),
+                generated_input_combinations: 0,
+                attempted_input_combinations: 0,
+                distinct_paths_recorded: 0,
+                truncated_by_input_cap: false,
+                truncated_by_path_cap: false,
+                truncated_by_timeout: false,
+                truncation_reasons: Vec::new(),
+            },
         };
         let mut seen_inputs = HashSet::new();
 
@@ -396,6 +609,16 @@ mod tests {
             paths_explored: 0,
             panics_found: 0,
             paths: Vec::new(),
+            metadata: SymbolicReportMetadata {
+                config: SymbolicConfig::default(),
+                generated_input_combinations: 0,
+                attempted_input_combinations: 0,
+                distinct_paths_recorded: 0,
+                truncated_by_input_cap: false,
+                truncated_by_path_cap: false,
+                truncated_by_timeout: false,
+                truncation_reasons: Vec::new(),
+            },
         };
         let mut seen_inputs = HashSet::new();
 
@@ -415,5 +638,67 @@ mod tests {
             .expect("entry export should resolve");
 
         assert_eq!(arg_count, 2);
+    }
+
+    #[test]
+    fn generate_input_combinations_marks_truncation_when_cap_hit() {
+        let analyzer = SymbolicAnalyzer::new();
+
+        let generated = analyzer.generate_input_combinations(2, 5);
+
+        assert_eq!(generated.combinations.len(), 5);
+        assert!(generated.truncated_by_input_cap);
+    }
+
+    #[test]
+    fn analyze_with_config_records_path_cap_metadata() {
+        let analyzer = SymbolicAnalyzer::new();
+        let wasm = wasm_with_import_and_exported_local();
+        let config = SymbolicConfig {
+            max_paths: 3,
+            max_input_combinations: 36,
+            timeout_secs: 30,
+        };
+
+        let report = analyzer
+            .analyze_with_config(&wasm, "entry", &config)
+            .expect("symbolic analysis should complete");
+
+        assert_eq!(report.paths_explored, 3);
+        assert!(report.metadata.truncated_by_path_cap);
+        assert_eq!(report.metadata.generated_input_combinations, 36);
+        assert_eq!(report.metadata.attempted_input_combinations, 3);
+    }
+
+    #[test]
+    fn generate_scenario_toml_includes_metadata_block() {
+        let analyzer = SymbolicAnalyzer::new();
+        let report = SymbolicReport {
+            function: "f".to_string(),
+            paths_explored: 1,
+            panics_found: 0,
+            paths: vec![PathResult {
+                inputs: "[0]".to_string(),
+                return_value: Some("1".to_string()),
+                panic: None,
+            }],
+            metadata: SymbolicReportMetadata {
+                config: SymbolicConfig::fast(),
+                generated_input_combinations: 10,
+                attempted_input_combinations: 1,
+                distinct_paths_recorded: 1,
+                truncated_by_input_cap: true,
+                truncated_by_path_cap: false,
+                truncated_by_timeout: false,
+                truncation_reasons: vec![
+                    "input combination cap reached at 64 generated combinations".to_string(),
+                ],
+            },
+        };
+
+        let toml = analyzer.generate_scenario_toml(&report);
+        assert!(toml.contains("[metadata]"));
+        assert!(toml.contains("max_paths = 25"));
+        assert!(toml.contains("truncated_by_input_cap = true"));
     }
 }

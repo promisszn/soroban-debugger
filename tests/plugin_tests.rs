@@ -31,6 +31,7 @@ impl MockPlugin {
                 },
                 library: "libmock.so".to_string(),
                 dependencies: vec![],
+                signature: None,
             },
             event_count: 0,
             initialized: false,
@@ -108,6 +109,7 @@ fn test_plugin_manifest_validation() {
         capabilities: PluginCapabilities::default(),
         library: "test.so".to_string(),
         dependencies: vec![],
+        signature: None,
     };
 
     assert!(manifest.validate().is_ok());
@@ -254,6 +256,7 @@ fn test_plugin_loader_discovery() {
         capabilities: PluginCapabilities::default(),
         library: "test.so".to_string(),
         dependencies: vec![],
+        signature: None,
     };
 
     let manifest_content = toml::to_string(&manifest).unwrap();
@@ -353,6 +356,7 @@ fn test_plugin_error_types() {
         found: "0.9.0".to_string(),
     };
     let err6 = PluginError::DependencyError("test".to_string());
+    let err7 = PluginError::TrustViolation("test".to_string());
 
     // All errors should display properly
     assert!(err1.to_string().contains("initialization"));
@@ -361,4 +365,5 @@ fn test_plugin_error_types() {
     assert!(err4.to_string().contains("Invalid"));
     assert!(err5.to_string().contains("mismatch"));
     assert!(err6.to_string().contains("Dependency"));
+    assert!(err7.to_string().contains("trust policy"));
 }

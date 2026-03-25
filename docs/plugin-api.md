@@ -43,6 +43,8 @@ Plugins are loaded from `~/.soroban-debug/plugins/` on startup. Each plugin must
 2. Have a `plugin.toml` manifest file
 3. Provide a shared library (`.so`, `.dylib`, or `.dll`)
 
+By default, the debugger runs plugin trust checks in `warn` mode. Unsigned or untrusted plugins still load, but they emit warnings with remediation steps. In `enforce` mode, they are blocked before the shared library is loaded.
+
 ```
 ~/.soroban-debug/plugins/
 ├── my-plugin/
@@ -115,6 +117,7 @@ impl MyPlugin {
                 },
                 library: "libmy_soroban_plugin.dylib".to_string(),
                 dependencies: vec![],
+                signature: None,
             },
         }
     }
@@ -429,7 +432,31 @@ supports_hot_reload = true      # Can be hot-reloaded
 
 # Plugin dependencies (other plugins required)
 dependencies = []
+
+# Optional detached signatures for trusted loading
+[signature]
+signer = "example-signer"
+public_key = "BASE64_ED25519_PUBLIC_KEY"
+manifest_signature = "BASE64_SIGNATURE_OF_UNSIGNED_MANIFEST"
+library_signature = "BASE64_SIGNATURE_OF_PLUGIN_LIBRARY"
 ```
+
+### Trust Policy
+
+Plugin trust policy is controlled through environment variables:
+
+- `SOROBAN_DEBUG_PLUGIN_TRUST_MODE=off|warn|enforce`
+- `SOROBAN_DEBUG_PLUGIN_ALLOWLIST=plugin-a,plugin-b`
+- `SOROBAN_DEBUG_PLUGIN_DENYLIST=plugin-c`
+- `SOROBAN_DEBUG_PLUGIN_ALLOWED_SIGNERS=team-release-key,abcdef1234...`
+
+Policy behavior:
+
+- `off`: trust checks are skipped
+- `warn`: trust failures produce warnings but plugins still load
+- `enforce`: denylisted, unsigned, invalidly signed, or unapproved plugins are blocked
+
+In `enforce` mode, a plugin must either be explicitly allowlisted or provide a valid Ed25519 signature from an allowed signer.
 
 ## Installation and Loading
 
@@ -467,10 +494,11 @@ On startup, the debugger:
 1. Scans `~/.soroban-debug/plugins/` for subdirectories
 2. Looks for `plugin.toml` in each subdirectory
 3. Validates the manifest
-4. Checks version compatibility
-5. Resolves dependencies
-6. Loads the shared library
-7. Calls `initialize()`
+4. Evaluates trust policy, signature state, allowlist, and denylist
+5. Checks version compatibility
+6. Resolves dependencies
+7. Loads the shared library
+8. Calls `initialize()`
 
 ## Hot-Reload Support
 
@@ -652,6 +680,7 @@ Check `min_debugger_version` in your manifest to specify the minimum required de
 - Check that `plugin.toml` is valid TOML
 - Verify the library file exists and has the correct name
 - Ensure the library exports `create_plugin` symbol
+- If trust policy blocked the plugin, sign the manifest and library, add the plugin to the allowlist, or relax `SOROBAN_DEBUG_PLUGIN_TRUST_MODE` for local-only development
 - Check debugger logs for error messages
 
 ### Hot-Reload Fails

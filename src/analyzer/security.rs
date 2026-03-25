@@ -20,42 +20,10 @@ pub struct SecurityFinding {
     pub location: String,
     pub description: String,
     pub remediation: String,
-    pub confidence: Option<FindingConfidence>,
-    pub context: Option<FindingContext>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FindingConfidence {
-    pub level: ConfidenceLevel,
-    pub rationale: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum ConfidenceLevel {
-    Low,
-    Medium,
-    High,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FindingContext {
-    pub control_flow_info: Option<ControlFlowContext>,
-    pub storage_call_pattern: Option<StorageCallPattern>,
-    pub loop_nesting_depth: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ControlFlowContext {
-    pub loop_types: Vec<String>,
-    pub block_types: Vec<String>,
-    pub conditional_branches: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StorageCallPattern {
-    pub calls_in_loops: usize,
-    pub calls_outside_loops: usize,
-    pub loop_types_with_calls: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -248,7 +216,7 @@ impl SecurityRule for HardcodedAddressRule {
                                      arguments instead of hardcoding."
                                         .to_string(),
                                 confidence: None,
-                                context: None,
+                                rationale: None,
                             });
                         }
                     }
@@ -302,32 +270,6 @@ impl ArithmeticCheckRule {
                 | WasmInstruction::I64Mul
         )
     }
-
-    fn is_guarded(instructions: &[WasmInstruction], idx: usize) -> bool {
-        // A guard must appear *after* the arithmetic instruction.
-        //
-        // Rationale:
-        //   • Instructions before `idx` execute before the result is on the
-        //     stack, so they cannot be checking that result.
-        //   • `Call` is intentionally excluded: an unrelated nearby call (a
-        //     logger, a helper, etc.) is not a bounds check and must not
-        //     suppress the finding.
-        //
-        // A legitimate overflow guard looks like:
-        //   i32.add          ← idx
-        //   <optional cmp>
-        //   br_if / if       ← this is the guard
-        //
-        // We allow up to 3 instructions of "compare setup" between the
-        // arithmetic and the conditional branch before giving up.
-        let end = (idx + 4).min(instructions.len());
-        for instr in &instructions[idx + 1..end] {
-            if matches!(instr, WasmInstruction::If | WasmInstruction::BrIf) {
-                return true;
-            }
-        }
-        false
-    }
 }
 
 struct AuthorizationCheckRule;
@@ -345,27 +287,47 @@ impl SecurityRule for AuthorizationCheckRule {
         trace: &[DynamicTraceEvent],
     ) -> Result<Vec<SecurityFinding>> {
         let mut findings = Vec::new();
-        let mut auth_seen = false;
-        let mut storage_write_seen = false;
+        let mut auth_sequence = None;
+        let mut problematic_storage_writes = Vec::new();
 
+        // First pass: find the earliest authorization event and any storage writes before it
         for entry in trace {
             if entry.kind == DynamicTraceEventKind::Authorization {
-                auth_seen = true;
-            }
-            if entry.kind == DynamicTraceEventKind::StorageWrite {
-                storage_write_seen = true;
+                // Record the earliest authorization event
+                match auth_sequence {
+                    None => auth_sequence = Some(entry.sequence),
+                    Some(current_auth_seq) => {
+                        if entry.sequence < current_auth_seq {
+                            auth_sequence = Some(entry.sequence);
+                        }
+                    }
+                }
+            } else if entry.kind == DynamicTraceEventKind::StorageWrite {
+                // Check if this storage write happens before any authorization
+                if let Some(auth_seq) = auth_sequence {
+                    if entry.sequence < auth_seq {
+                        problematic_storage_writes.push(entry.sequence);
+                    }
+                } else {
+                    // No auth seen yet, this storage write is problematic
+                    problematic_storage_writes.push(entry.sequence);
+                }
             }
         }
 
-        if storage_write_seen && !auth_seen {
+        // If we have storage writes without preceding auth, report a finding
+        if !problematic_storage_writes.is_empty() {
             findings.push(SecurityFinding {
                 rule_id: self.name().to_string(),
                 severity: Severity::High,
                 location: "Dynamic trace".to_string(),
-                description: "Storage mutation detected without an authorization event in the execution trace.".to_string(),
+                description: format!(
+                    "Storage mutation detected without preceding authorization. Found {} storage write(s) occurring before any authorization event.",
+                    problematic_storage_writes.len()
+                ),
                 remediation: "Ensure all sensitive functions call `address.require_auth()` before mutating state.".to_string(),
                 confidence: None,
-                context: None,
+                rationale: None,
             });
         }
 
@@ -387,46 +349,22 @@ impl SecurityRule for ReentrancyPatternRule {
         _executor: Option<&ContractExecutor>,
         trace: &[DynamicTraceEvent],
     ) -> Result<Vec<SecurityFinding>> {
-        Ok(analyze_reentrancy_dynamic(trace))
+        Ok(analyze_reentrancy_pattern_dynamic(trace))
     }
 }
 
-/// Core reentrancy detection: flags a StorageWrite only when it occurs at the
-/// same call_depth as a preceding CrossContractCall (same call frame).
-/// Writes inside a callee (deeper depth) are safe and not flagged.
-/// Pending depths are evicted when execution returns to the same or shallower
-/// frame (any non-CrossContractCall event at depth <= recorded depth means the
-/// call has returned), preventing false positives from unrelated later writes.
-fn analyze_reentrancy_dynamic(trace: &[DynamicTraceEvent]) -> Vec<SecurityFinding> {
-    let mut pending_depths: Vec<u32> = Vec::new();
-    for entry in trace {
-        match entry.kind {
-            DynamicTraceEventKind::CrossContractCall => {
-                pending_depths.push(entry.call_depth);
-            }
-            DynamicTraceEventKind::CrossContractReturn => {
-                // The call at this depth has returned; evict it.
-                if let Some(pos) = pending_depths.iter().rposition(|&d| d == entry.call_depth) {
-                    pending_depths.remove(pos);
-                }
-            }
-            DynamicTraceEventKind::StorageWrite => {
-                if pending_depths.contains(&entry.call_depth) {
-                    return vec![SecurityFinding {
-                        rule_id: "reentrancy-pattern".to_string(),
-                        severity: Severity::Medium,
-                        location: format!("Trace event {}", entry.sequence),
-                        description: "Storage write detected after an external contract call in the same call frame. Possible reentrancy risk.".to_string(),
-                        remediation: "Follow checks-effects-interactions: finalize state before external calls.".to_string(),
-                        confidence: None,
-                        context: None,
-                    }];
-                }
-            }
-            _ => {}
-        }
-    }
-    Vec::new()
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FrameKey {
+    function: Option<String>,
+    call_depth: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingCrossCall {
+    frame: Option<FrameKey>,
+    sequence: usize,
+    pre_call_write_seen: bool,
+    inferred: bool,
 }
 
 struct CrossContractImportRule;
@@ -605,8 +543,8 @@ impl SecurityRule for UnboundedIterationRule {
 struct UnboundedStaticSignal {
     suspicious: bool,
     storage_calls_inside_loops: usize,
-    confidence: Option<FindingConfidence>,
-    context: Option<FindingContext>,
+    confidence: Option<f32>,
+    rationale: Option<String>,
     loop_types: Vec<String>,
     max_nesting_depth: usize,
 }
@@ -696,7 +634,9 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
                         }
                         Operator::Else => {}
                         Operator::End => {
-                            control_flow_stack.pop();
+                            if let Some(_frame) = control_flow_stack.pop() {
+                                // max_nesting_depth tracks the peak depth and shouldn't be decremented
+                            }
                         }
                         Operator::Call { function_index } => {
                             let is_storage_call = storage_import_indices.contains(&function_index);
@@ -733,19 +673,19 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
     signal.loop_types = loop_types_seen.into_iter().collect();
 
     // Calculate confidence based on multiple factors
-    let confidence_level = if storage_calls_in_loops > 0 {
+    let confidence = if storage_calls_in_loops > 0 {
         if signal.max_nesting_depth >= 2 && storage_calls_in_loops >= 3 {
-            ConfidenceLevel::High
+            0.9
         } else if signal.max_nesting_depth > 1 || storage_calls_in_loops > 1 {
-            ConfidenceLevel::Medium
+            0.7
         } else {
-            ConfidenceLevel::Low
+            0.5
         }
     } else {
-        ConfidenceLevel::Low
+        0.2
     };
 
-    let confidence_rationale = format!(
+    signal.rationale = Some(format!(
         "Storage calls in loops: {}, max nesting depth: {}, loop types with calls: {:?}",
         storage_calls_in_loops, signal.max_nesting_depth, loop_types_with_calls
     );
@@ -783,6 +723,8 @@ fn is_storage_read_import(module: &str, name: &str) -> bool {
         "hascontractdata",
         "mapget",
         "vecget",
+        "contractstorageget",
+        "sorobanstoragehas",
     ];
 
     if !is_env_like_module(module) {
@@ -794,17 +736,19 @@ fn is_storage_read_import(module: &str, name: &str) -> bool {
         if n == *base {
             return true;
         }
-        // Handle prefix-qualified names like "contract_storage_get" or "soroban_storage_has"
-        if n.ends_with(base) {
-            return true;
-        }
-        if n.starts_with(base) {
-            let suffix = &n[base.len()..];
+        if let Some(suffix) = n.strip_prefix(base) {
+            if suffix.is_empty() {
+                return true;
+            }
             if let Some(rest) = suffix.strip_prefix('v') {
                 if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
                     return true;
                 }
             }
+        }
+        // Handle prefix-qualified names like "contract_storage_get".
+        if n.ends_with(base) {
+            return true;
         }
     }
 
@@ -849,7 +793,127 @@ fn analyze_unbounded_iteration_dynamic(trace: &[DynamicTraceEvent]) -> Option<Se
         ),
         remediation: "Use explicit iteration bounds and pagination for storage traversal to avoid gas-denial risks.".to_string(),
         confidence: None,
-        context: None,
+        rationale: None,
+    })
+}
+
+fn analyze_reentrancy_pattern_dynamic(trace: &[DynamicTraceEvent]) -> Vec<SecurityFinding> {
+    let mut entries = trace.to_vec();
+    entries.sort_by_key(|entry| entry.sequence);
+
+    let mut findings = Vec::new();
+    let mut writes_seen_by_frame: HashMap<FrameKey, usize> = HashMap::new();
+    let mut last_known_frame: Option<FrameKey> = None;
+    let mut pending_cross_call: Option<PendingCrossCall> = None;
+
+    for entry in &entries {
+        let explicit_frame = frame_key_for(entry);
+        let active_frame = explicit_frame.clone().or_else(|| last_known_frame.clone());
+
+        match entry.kind {
+            DynamicTraceEventKind::FunctionCall => {
+                if let Some(frame) = explicit_frame {
+                    last_known_frame = Some(frame);
+                }
+            }
+            DynamicTraceEventKind::StorageWrite => {
+                if let Some(frame) = active_frame.clone() {
+                    *writes_seen_by_frame.entry(frame.clone()).or_insert(0) += 1;
+                    last_known_frame = Some(frame.clone());
+                }
+
+                let Some(pending) = pending_cross_call.as_ref() else {
+                    continue;
+                };
+
+                let same_frame = match (&pending.frame, &active_frame) {
+                    (Some(expected), Some(actual)) => expected == actual,
+                    _ => false,
+                };
+
+                let inferred_match =
+                    pending.inferred && pending.frame.is_none() && active_frame.is_none();
+
+                if !(same_frame || inferred_match) {
+                    continue;
+                }
+
+                if pending.pre_call_write_seen {
+                    pending_cross_call = None;
+                    continue;
+                }
+
+                let (confidence, rationale) = if same_frame {
+                    (
+                        0.92,
+                        format!(
+                            "Observed an external interaction at trace event {} and a later \
+                             storage write in the same call frame. This matches the classic \
+                             checks-effects-interactions violation shape.",
+                            pending.sequence
+                        ),
+                    )
+                } else {
+                    (
+                        0.42,
+                        format!(
+                            "Observed a global sequence of external call at trace event {} \
+                             followed by a storage write, but the trace lacked frame metadata. \
+                             Treat this as a low-confidence signal.",
+                            pending.sequence
+                        ),
+                    )
+                };
+
+                findings.push(SecurityFinding {
+                    rule_id: "reentrancy-pattern".to_string(),
+                    severity: if confidence >= 0.8 {
+                        Severity::High
+                    } else {
+                        Severity::Low
+                    },
+                    location: format!("Trace event {}", entry.sequence),
+                    description: "Storage write detected after an external contract call in the same execution frame. Possible reentrancy risk.".to_string(),
+                    remediation: "Follow checks-effects-interactions: finalize critical state before external calls, or isolate post-call writes to benign bookkeeping.".to_string(),
+                    confidence: Some(confidence),
+                    rationale: Some(rationale),
+                });
+                pending_cross_call = None;
+            }
+            DynamicTraceEventKind::CrossContractCall => {
+                let frame = active_frame.clone();
+                let pre_call_write_seen = frame
+                    .as_ref()
+                    .and_then(|key| writes_seen_by_frame.get(key).copied())
+                    .unwrap_or(0)
+                    > 0;
+
+                pending_cross_call = Some(PendingCrossCall {
+                    frame,
+                    sequence: entry.sequence,
+                    pre_call_write_seen,
+                    inferred: active_frame.is_none(),
+                });
+            }
+            _ => {
+                if let Some(frame) = active_frame {
+                    last_known_frame = Some(frame);
+                }
+            }
+        }
+    }
+
+    findings
+}
+
+fn frame_key_for(entry: &DynamicTraceEvent) -> Option<FrameKey> {
+    if entry.function.is_none() && entry.call_depth.is_none() {
+        return None;
+    }
+
+    Some(FrameKey {
+        function: entry.function.clone(),
+        call_depth: entry.call_depth,
     })
 }
 
@@ -1318,10 +1382,11 @@ mod tests {
                 sequence: i,
                 kind: DynamicTraceEventKind::StorageRead,
                 message: "contract_storage_get".to_string(),
+                caller: None,
                 function: Some("sweep".to_string()),
+                call_depth: Some(0),
                 storage_key: Some(format!("user:{}", i % 4)),
                 storage_value: None,
-                call_depth: 0,
             });
         }
 
@@ -1334,6 +1399,138 @@ mod tests {
     fn static_signal_false_for_non_wasm_bytes() {
         let signal = analyze_unbounded_iteration_static(&[1, 2, 3, 4, 5]);
         assert!(!signal.suspicious);
+    }
+
+    #[test]
+    fn reentrancy_rule_flags_same_frame_write_after_cross_contract_call() {
+        let findings = analyze_reentrancy_pattern_dynamic(&[
+            DynamicTraceEvent {
+                sequence: 1,
+                kind: DynamicTraceEventKind::FunctionCall,
+                message: "main -> withdraw".to_string(),
+                caller: Some("main".to_string()),
+                function: Some("withdraw".to_string()),
+                call_depth: Some(0),
+                storage_key: None,
+                storage_value: None,
+            },
+            DynamicTraceEvent {
+                sequence: 2,
+                kind: DynamicTraceEventKind::CrossContractCall,
+                message: "withdraw invokes token.transfer".to_string(),
+                caller: Some("main".to_string()),
+                function: Some("withdraw".to_string()),
+                call_depth: Some(0),
+                storage_key: None,
+                storage_value: None,
+            },
+            DynamicTraceEvent {
+                sequence: 3,
+                kind: DynamicTraceEventKind::StorageWrite,
+                message: "write balance".to_string(),
+                caller: Some("main".to_string()),
+                function: Some("withdraw".to_string()),
+                call_depth: Some(0),
+                storage_key: Some("balance:alice".to_string()),
+                storage_value: Some("0".to_string()),
+            },
+        ]);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "reentrancy-pattern");
+        assert!(matches!(findings[0].severity, Severity::High));
+        assert!(findings[0].confidence.unwrap_or_default() >= 0.8);
+        assert!(findings[0]
+            .rationale
+            .as_deref()
+            .unwrap_or_default()
+            .contains("same call frame"));
+    }
+
+    #[test]
+    fn reentrancy_rule_skips_post_call_write_when_pre_call_effect_seen_in_same_frame() {
+        let findings = analyze_reentrancy_pattern_dynamic(&[
+            DynamicTraceEvent {
+                sequence: 1,
+                kind: DynamicTraceEventKind::FunctionCall,
+                message: "main -> settle".to_string(),
+                caller: Some("main".to_string()),
+                function: Some("settle".to_string()),
+                call_depth: Some(0),
+                storage_key: None,
+                storage_value: None,
+            },
+            DynamicTraceEvent {
+                sequence: 2,
+                kind: DynamicTraceEventKind::StorageWrite,
+                message: "mark settled".to_string(),
+                caller: Some("main".to_string()),
+                function: Some("settle".to_string()),
+                call_depth: Some(0),
+                storage_key: Some("settled:alice".to_string()),
+                storage_value: Some("true".to_string()),
+            },
+            DynamicTraceEvent {
+                sequence: 3,
+                kind: DynamicTraceEventKind::CrossContractCall,
+                message: "settle invokes payout".to_string(),
+                caller: Some("main".to_string()),
+                function: Some("settle".to_string()),
+                call_depth: Some(0),
+                storage_key: None,
+                storage_value: None,
+            },
+            DynamicTraceEvent {
+                sequence: 4,
+                kind: DynamicTraceEventKind::StorageWrite,
+                message: "emit bookkeeping marker".to_string(),
+                caller: Some("main".to_string()),
+                function: Some("settle".to_string()),
+                call_depth: Some(0),
+                storage_key: Some("audit:last_settle".to_string()),
+                storage_value: Some("1".to_string()),
+            },
+        ]);
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn reentrancy_rule_skips_write_in_different_frame_after_cross_contract_call() {
+        let findings = analyze_reentrancy_pattern_dynamic(&[
+            DynamicTraceEvent {
+                sequence: 1,
+                kind: DynamicTraceEventKind::FunctionCall,
+                message: "main -> withdraw".to_string(),
+                caller: Some("main".to_string()),
+                function: Some("withdraw".to_string()),
+                call_depth: Some(0),
+                storage_key: None,
+                storage_value: None,
+            },
+            DynamicTraceEvent {
+                sequence: 2,
+                kind: DynamicTraceEventKind::CrossContractCall,
+                message: "withdraw invokes token.transfer".to_string(),
+                caller: Some("main".to_string()),
+                function: Some("withdraw".to_string()),
+                call_depth: Some(0),
+                storage_key: None,
+                storage_value: None,
+            },
+            DynamicTraceEvent {
+                sequence: 3,
+                kind: DynamicTraceEventKind::StorageWrite,
+                message: "nested contract writes receipt".to_string(),
+                caller: Some("withdraw".to_string()),
+                function: Some("token.transfer".to_string()),
+                call_depth: Some(1),
+                storage_key: Some("receipt:1".to_string()),
+                storage_value: Some("ok".to_string()),
+            },
+        ]);
+
+        assert!(findings.is_empty());
     }
 
     // -----------------------------------------------------------------------
@@ -1376,5 +1573,159 @@ mod tests {
         assert!(!is_storage_read_import("not_env", "storage_get"));
         assert!(!is_storage_read_import("mylib", "storage_get"));
         assert!(!is_storage_read_import("environments", "storage_get"));
+    }
+
+    // -----------------------------------------------------------------------
+    // AuthorizationCheckRule — dynamic trace tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn auth_rule_detects_storage_before_auth() {
+        let rule = AuthorizationCheckRule;
+
+        // Test case: storage write happens before authorization
+        let trace = vec![
+            DynamicTraceEvent {
+                sequence: 0,
+                kind: DynamicTraceEventKind::StorageWrite,
+                message: "write key1".to_string(),
+                caller: None,
+                function: Some("test_function".to_string()),
+                storage_key: Some("key1".to_string()),
+                storage_value: Some("value1".to_string()),
+                call_depth: Some(0),
+            },
+            DynamicTraceEvent {
+                sequence: 1,
+                kind: DynamicTraceEventKind::Authorization,
+                message: "auth check".to_string(),
+                caller: None,
+                function: Some("test_function".to_string()),
+                storage_key: None,
+                storage_value: None,
+                call_depth: Some(0),
+            },
+        ];
+
+        let findings = rule.analyze_dynamic(None, &trace).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "missing-auth");
+        assert!(findings[0]
+            .description
+            .contains("1 storage write(s) occurring before any authorization event"));
+    }
+
+    #[test]
+    fn auth_rule_allows_storage_after_auth() {
+        let rule = AuthorizationCheckRule;
+
+        // Test case: authorization happens before storage write (should be OK)
+        let trace = vec![
+            DynamicTraceEvent {
+                sequence: 0,
+                kind: DynamicTraceEventKind::Authorization,
+                message: "auth check".to_string(),
+                caller: None,
+                function: Some("test_function".to_string()),
+                storage_key: None,
+                storage_value: None,
+                call_depth: Some(0),
+            },
+            DynamicTraceEvent {
+                sequence: 1,
+                kind: DynamicTraceEventKind::StorageWrite,
+                message: "write key1".to_string(),
+                caller: None,
+                function: Some("test_function".to_string()),
+                storage_key: Some("key1".to_string()),
+                storage_value: Some("value1".to_string()),
+                call_depth: Some(0),
+            },
+        ];
+
+        let findings = rule.analyze_dynamic(None, &trace).unwrap();
+        assert_eq!(findings.len(), 0);
+    }
+
+    #[test]
+    fn auth_rule_detects_multiple_storage_before_auth() {
+        let rule = AuthorizationCheckRule;
+
+        // Test case: multiple storage writes happen before authorization
+        let trace = vec![
+            DynamicTraceEvent {
+                sequence: 0,
+                kind: DynamicTraceEventKind::StorageWrite,
+                message: "write key1".to_string(),
+                caller: None,
+                function: Some("test_function".to_string()),
+                storage_key: Some("key1".to_string()),
+                storage_value: Some("value1".to_string()),
+                call_depth: Some(0),
+            },
+            DynamicTraceEvent {
+                sequence: 1,
+                kind: DynamicTraceEventKind::StorageWrite,
+                message: "write key2".to_string(),
+                caller: None,
+                function: Some("test_function".to_string()),
+                storage_key: Some("key2".to_string()),
+                storage_value: Some("value2".to_string()),
+                call_depth: Some(0),
+            },
+            DynamicTraceEvent {
+                sequence: 2,
+                kind: DynamicTraceEventKind::Authorization,
+                message: "auth check".to_string(),
+                caller: None,
+                function: Some("test_function".to_string()),
+                storage_key: None,
+                storage_value: None,
+                call_depth: Some(0),
+            },
+        ];
+
+        let findings = rule.analyze_dynamic(None, &trace).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "missing-auth");
+        assert!(findings[0]
+            .description
+            .contains("2 storage write(s) occurring before any authorization event"));
+    }
+
+    #[test]
+    fn auth_rule_detects_storage_without_any_auth() {
+        let rule = AuthorizationCheckRule;
+
+        // Test case: storage writes with no authorization at all
+        let trace = vec![
+            DynamicTraceEvent {
+                sequence: 0,
+                kind: DynamicTraceEventKind::StorageWrite,
+                message: "write key1".to_string(),
+                caller: None,
+                function: Some("test_function".to_string()),
+                storage_key: Some("key1".to_string()),
+                storage_value: Some("value1".to_string()),
+                call_depth: Some(0),
+            },
+            DynamicTraceEvent {
+                sequence: 1,
+                kind: DynamicTraceEventKind::StorageWrite,
+                message: "write key2".to_string(),
+                caller: None,
+                function: Some("test_function".to_string()),
+                storage_key: Some("key2".to_string()),
+                storage_value: Some("value2".to_string()),
+                call_depth: Some(0),
+            },
+        ];
+
+        let findings = rule.analyze_dynamic(None, &trace).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "missing-auth");
+        assert!(findings[0]
+            .description
+            .contains("2 storage write(s) occurring before any authorization event"));
     }
 }

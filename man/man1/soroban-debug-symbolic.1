@@ -4,7 +4,7 @@
 .SH NAME
 symbolic \- Run symbolic execution to explore contract input space
 .SH SYNOPSIS
-\fBsymbolic\fR <\fB\-c\fR|\fB\-\-contract\fR> <\fB\-f\fR|\fB\-\-function\fR> [\fB\-o\fR|\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBsymbolic\fR <\fB\-c\fR|\fB\-\-contract\fR> <\fB\-f\fR|\fB\-\-function\fR> [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-profile\fR] [\fB\-\-input\-combination\-cap\fR] [\fB\-\-path\-cap\fR] [\fB\-\-timeout\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Run symbolic execution to explore contract input space
 .SH OPTIONS
@@ -17,6 +17,22 @@ Function name to execute
 .TP
 \fB\-o\fR, \fB\-\-output\fR \fI<OUTPUT>\fR
 Output file for the scenario TOML
+.TP
+\fB\-\-profile\fR \fI<PROFILE>\fR [default: balanced]
+Preset symbolic exploration budget profile
+.br
+
+.br
+[\fIpossible values: \fRfast, balanced, deep]
+.TP
+\fB\-\-input\-combination\-cap\fR \fI<N>\fR
+Maximum number of input combinations to generate deterministically
+.TP
+\fB\-\-path\-cap\fR \fI<N>\fR
+Maximum number of generated inputs to execute
+.TP
+\fB\-\-timeout\fR \fI<SECONDS>\fR
+Overall symbolic analysis timeout in seconds
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

@@ -17,8 +17,9 @@ Thank you for your interest in contributing to the **Soroban Debugger** project!
 9. [Issue Guidelines](#issue-guidelines)
 10. [Areas for Contribution](#areas-for-contribution)
 11. [Project Structure](#project-structure)
-12. [Code of Conduct](#code-of-conduct)
-13. [Communication](#communication)
+12. [Updating Man Pages](#updating-man-pages)
+13. [Code of Conduct](#code-of-conduct)
+14. [Communication](#communication)
 
 ---
 
@@ -257,6 +258,7 @@ Tips:
 - [ ] Clippy is clean (`cargo clippy --workspace --all-targets --all-features -- -D warnings`)
 - [ ] Commit message follows [Conventional Commits](https://www.conventionalcommits.org/)
 - [ ] PR description mentions the related issue(s)
+- [ ] If CLI flags/subcommands/help text changed, man pages regenerated (`make regen-man`) and `.1` files committed
 
 **Steps:**
 
@@ -344,6 +346,41 @@ If you have ideas outside these areas, feel free to discuss them by opening an i
 - `src/utils/` — Utility functions
 - `tests/` — Integration tests
 - `examples/` — Example usage
+
+---
+
+## Updating Man Pages
+
+Man pages in `man/man1/` are generated automatically from the CLI source via `build.rs` and `clap_mangen`. **Do not hand-edit `.1` files** — changes will be overwritten on the next regeneration.
+
+### When to regenerate
+
+Regenerate whenever you:
+- Add, remove, or rename a CLI subcommand
+- Add, remove, or rename a CLI flag or argument
+- Change any help text or description string
+
+### How to regenerate
+
+```bash
+make regen-man
+```
+
+Commit the updated `.1` files alongside your CLI changes in the same PR.
+
+### CI enforcement
+
+The `check-manpages` CI job runs on every PR and push to `main`. It regenerates man pages into a temp directory and diffs them against the committed versions. The job fails if any drift is detected — PRs cannot be merged with stale man pages.
+
+To verify locally before pushing:
+
+```bash
+# Regenerate from current source
+make regen-man
+
+# Verify in sync (should exit 0)
+make check-man
+```
 
 ---
 

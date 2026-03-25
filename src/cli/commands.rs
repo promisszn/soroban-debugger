@@ -84,6 +84,15 @@ fn render_symbolic_report(report: &crate::analyzer::symbolic::SymbolicReport) ->
         format!("Panics found: {}", report.panics_found),
     ];
 
+    if report.metadata.truncation_reasons.is_empty() {
+        lines.push("Truncation: none".to_string());
+    } else {
+        lines.push(format!(
+            "Truncation: {}",
+            report.metadata.truncation_reasons.join("; ")
+        ));
+    }
+
     if report.paths.is_empty() {
         lines.push("No distinct execution paths were discovered.".to_string());
         return lines.join("\n");
@@ -107,6 +116,28 @@ fn render_symbolic_report(report: &crate::analyzer::symbolic::SymbolicReport) ->
     }
 
     lines.join("\n")
+}
+
+fn symbolic_profile_config(profile: SymbolicProfile) -> SymbolicConfig {
+    match profile {
+        SymbolicProfile::Fast => SymbolicConfig::fast(),
+        SymbolicProfile::Balanced => SymbolicConfig::balanced(),
+        SymbolicProfile::Deep => SymbolicConfig::deep(),
+    }
+}
+
+fn symbolic_config_from_args(args: &SymbolicArgs) -> SymbolicConfig {
+    let mut config = symbolic_profile_config(args.profile);
+    if let Some(path_cap) = args.path_cap {
+        config.max_paths = path_cap;
+    }
+    if let Some(input_cap) = args.input_combination_cap {
+        config.max_input_combinations = input_cap;
+    }
+    if let Some(timeout) = args.timeout {
+        config.timeout_secs = timeout;
+    }
+    config
 }
 
 fn render_security_report(output: &AnalyzeCommandOutput) -> String {
@@ -150,20 +181,159 @@ fn render_security_report(output: &AnalyzeCommandOutput) -> String {
             finding.location
         ));
         lines.push(format!("     {}", finding.description));
+        if let Some(confidence) = finding.confidence {
+            lines.push(format!("     Confidence: {:.0}%", confidence * 100.0));
+        }
+        if let Some(rationale) = &finding.rationale {
+            lines.push(format!("     Rationale: {}", rationale));
+        }
         lines.push(format!("     Remediation: {}", finding.remediation));
     }
 
     lines.join("\n")
 }
 
-/// Placeholder for instruction stepping
+/// Run instruction-level stepping mode.
 fn run_instruction_stepping(
     _engine: &mut DebuggerEngine,
     _function: &str,
     _args: Option<&str>,
 ) -> Result<()> {
-    print_info("Instruction stepping is not yet fully implemented");
+    logging::log_display(
+        "\n=== Instruction Stepping Mode ===",
+        logging::LogLevel::Info,
+    );
+    logging::log_display(
+        "Type 'help' for available commands\n",
+        logging::LogLevel::Info,
+    );
+
+    display_instruction_context(engine, 3);
+
+    loop {
+        print!("(step) > ");
+        std::io::Write::flush(&mut std::io::stdout())
+            .map_err(|e| DebuggerError::FileError(format!("Failed to flush stdout: {}", e)))?;
+
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| DebuggerError::FileError(format!("Failed to read line: {}", e)))?;
+
+        let input = input.trim().to_lowercase();
+        let cmd = input.as_str();
+
+        let result = match cmd {
+            "n" | "next" | "s" | "step" | "into" | "" => engine.step_into(),
+            "o" | "over" => engine.step_over(),
+            "u" | "out" => engine.step_out(),
+            "b" | "block" => engine.step_block(),
+            "p" | "prev" | "back" => engine.step_back(),
+            "c" | "continue" => {
+                logging::log_display("Continuing execution...", logging::LogLevel::Info);
+                engine.continue_execution()?;
+                let res = engine.execute_without_breakpoints(function, args)?;
+                logging::log_display(
+                    format!("Execution completed. Result: {:?}", res),
+                    logging::LogLevel::Info,
+                );
+                break;
+            }
+            "i" | "info" => {
+                display_instruction_info(engine);
+                continue;
+            }
+            "ctx" | "context" => {
+                display_instruction_context(engine, 5);
+                continue;
+            }
+            "h" | "help" => {
+                logging::log_display(Formatter::format_stepping_help(), logging::LogLevel::Info);
+                continue;
+            }
+            "q" | "quit" | "exit" => {
+                logging::log_display(
+                    "Exiting instruction stepping mode...",
+                    logging::LogLevel::Info,
+                );
+                break;
+            }
+            _ => {
+                logging::log_display(
+                    format!("Unknown command: {cmd}. Type 'help' for available commands."),
+                    logging::LogLevel::Info,
+                );
+                continue;
+            }
+        };
+
+        match result {
+            Ok(true) => display_instruction_context(engine, 3),
+            Ok(false) => {
+                let msg = if matches!(cmd, "p" | "prev" | "back") {
+                    "Cannot step back: no previous instruction"
+                } else {
+                    "Cannot step: execution finished or error occurred"
+                };
+                logging::log_display(msg, logging::LogLevel::Info);
+            }
+            Err(e) => {
+                logging::log_display(format!("Error stepping: {}", e), logging::LogLevel::Info)
+            }
+        }
+    }
+
     Ok(())
+}
+
+fn display_instruction_context(engine: &DebuggerEngine, context_size: usize) {
+    let context = engine.get_instruction_context(context_size);
+    let formatted = Formatter::format_instruction_context(&context, context_size);
+    logging::log_display(formatted, logging::LogLevel::Info);
+}
+
+fn display_instruction_info(engine: &DebuggerEngine) {
+    if let Ok(state) = engine.state().lock() {
+        let ip = state.instruction_pointer();
+        let step_mode = if ip.is_stepping() {
+            Some(ip.step_mode())
+        } else {
+            None
+        };
+
+        logging::log_display(
+            Formatter::format_instruction_pointer_state(
+                ip.current_index(),
+                ip.call_stack_depth(),
+                step_mode,
+                ip.is_stepping(),
+            ),
+            logging::LogLevel::Info,
+        );
+        logging::log_display(
+            Formatter::format_instruction_stats(
+                state.instructions().len(),
+                ip.current_index(),
+                state.step_count(),
+            ),
+            logging::LogLevel::Info,
+        );
+
+        if let Some(inst) = state.current_instruction() {
+            logging::log_display(
+                format!(
+                    "Current Instruction: {} (Offset: 0x{:08x}, Local index: {}, Control flow: {})",
+                    inst.name(),
+                    inst.offset,
+                    inst.local_index,
+                    inst.is_control_flow()
+                ),
+                logging::LogLevel::Info,
+            );
+        }
+    } else {
+        logging::log_display("Cannot access debug state", logging::LogLevel::Info);
+    }
 }
 
 /// Parse step mode from string
@@ -601,8 +771,11 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
 
         match engine.executor_mut().finish() {
             Ok((footprint, storage)) => {
+                #[allow(clippy::clone_on_copy)]
                 let mut footprint_map = std::collections::HashMap::new();
                 for (k, v) in &footprint.0 {
+                    #[allow(clippy::clone_on_copy)]
+                    footprint_map.insert(k.clone(), v.clone());
                     footprint_map.insert(k.clone(), *v);
                 }
 
@@ -1531,11 +1704,22 @@ pub fn server(args: ServerArgs) -> Result<()> {
     ));
     if args.token.is_some() {
         print_info("Token authentication enabled");
+        if token.trim().len() < 16 {
+            print_warning(
+                "Remote debug token is shorter than 16 characters. Prefer at least 16 characters \
+                 and ideally a random 32-byte token.",
+            );
+        }
     } else {
         print_info("Token authentication disabled");
     }
     if args.tls_cert.is_some() || args.tls_key.is_some() {
         print_info("TLS enabled");
+    } else if args.token.is_some() {
+        print_warning(
+            "Token authentication is enabled without TLS. Assume traffic is plaintext unless you \
+             are using a trusted private network or external TLS termination.",
+        );
     }
 
     let server = crate::server::DebugServer::new(
@@ -1730,7 +1914,8 @@ pub fn symbolic(args: SymbolicArgs, _verbosity: Verbosity) -> Result<()> {
         .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
 
     let analyzer = SymbolicAnalyzer::new();
-    let report = analyzer.analyze(&wasm_file.bytes, &args.function)?;
+    let config = symbolic_config_from_args(&args);
+    let report = analyzer.analyze_with_config(&wasm_file.bytes, &args.function, &config)?;
 
     println!("{}", render_symbolic_report(&report));
 

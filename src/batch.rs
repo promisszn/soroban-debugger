@@ -74,7 +74,7 @@ pub struct BatchExecutor {
 
 // Thread-local storage for executors to avoid re-initialization
 thread_local! {
-    static THREAD_EXECUTOR: RefCell<Option<(Arc<Vec<u8>>, ContractExecutor)>> = RefCell::new(None);
+    static THREAD_EXECUTOR: RefCell<Option<(Arc<Vec<u8>>, ContractExecutor)>> = const { RefCell::new(None) };
 }
 
 impl BatchExecutor {
@@ -339,7 +339,7 @@ fn json_values_equal(a: &Value, b: &Value) -> bool {
         (Value::Object(a), Value::Object(b)) => {
             a.len() == b.len()
                 && a.iter()
-                    .all(|(k, v)| b.get(k).map_or(false, |bv| json_values_equal(v, bv)))
+                    .all(|(k, v)| b.get(k).is_some_and(|bv| json_values_equal(v, bv)))
         }
         _ => a == b,
     }

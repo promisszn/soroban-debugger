@@ -521,10 +521,11 @@ impl ContractExecutor {
                 sequence: access.sequence,
                 kind,
                 message: format!("storage:{}:{}", access.sequence, access.key),
+                caller: None,
                 function: None,
+                call_depth: None,
                 storage_key: Some(access.key.clone()),
                 storage_value: value,
-                call_depth: 0,
             });
         }
 
@@ -533,10 +534,11 @@ impl ContractExecutor {
                 sequence: call.sequence,
                 kind: DynamicTraceEventKind::FunctionCall,
                 message: format!("{} -> {}", call.caller, call.callee),
+                caller: Some(call.caller.clone()),
                 function: Some(call.callee.clone()),
+                call_depth: Some(call.depth),
                 storage_key: None,
                 storage_value: None,
-                call_depth: 0,
             });
         }
 
@@ -547,10 +549,11 @@ impl ContractExecutor {
                 sequence: next_sequence,
                 kind: classify_diagnostic_event_kind(&message),
                 message,
+                caller: None,
                 function: None,
+                call_depth: None,
                 storage_key: None,
                 storage_value: None,
-                call_depth: 0,
             });
             next_sequence += 1;
         }

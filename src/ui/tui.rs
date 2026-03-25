@@ -154,12 +154,12 @@ impl DebuggerUI {
                 if parts.len() < 2 {
                     tracing::warn!("breakpoint set without function name");
                 } else {
-                    self.engine.breakpoints_mut().add(parts[1]);
+                    self.engine.breakpoints_mut().add_simple(parts[1]);
                     crate::logging::log_breakpoint_set(parts[1]);
                 }
             }
             "list-breaks" => {
-                let breakpoints = self.engine.breakpoints_mut().list();
+                let breakpoints = self.engine.breakpoints_mut().list_detailed();
                 if breakpoints.is_empty() {
                     crate::logging::log_display(
                         "No breakpoints set",
@@ -167,8 +167,13 @@ impl DebuggerUI {
                     );
                 } else {
                     for bp in breakpoints {
+                        let cond_str = bp
+                            .condition
+                            .clone()
+                            .map(|c| format!(" (if {:?})", c))
+                            .unwrap_or_default();
                         crate::logging::log_display(
-                            format!("- {}", bp),
+                            format!("- {}{}", bp.function, cond_str),
                             crate::logging::LogLevel::Info,
                         );
                     }
@@ -177,7 +182,7 @@ impl DebuggerUI {
             "clear" => {
                 if parts.len() < 2 {
                     tracing::warn!("clear command missing function name");
-                } else if self.engine.breakpoints_mut().remove(parts[1]) {
+                } else if self.engine.breakpoints_mut().remove_function(parts[1]) {
                     crate::logging::log_breakpoint_cleared(parts[1]);
                 } else {
                     tracing::debug!(breakpoint = parts[1], "No breakpoint found at function");
@@ -265,7 +270,7 @@ impl DebuggerUI {
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
-            "  break <func>       Set breakpoint",
+            "  break <func> [cond] Set breakpoint with optional condition",
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(

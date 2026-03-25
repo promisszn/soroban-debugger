@@ -1,7 +1,15 @@
+export const WIRE_PROTOCOL_MIN_VERSION = 1;
+export const WIRE_PROTOCOL_MAX_VERSION = 1;
+
 export interface BreakpointLocation {
+  id: string;
   source: string;
   line: number;
   column?: number;
+  functionName?: string;
+  condition?: string;
+  hitCondition?: string;
+  logMessage?: string;
 }
 
 export interface StackFrame {
@@ -64,4 +72,10 @@ export interface DebuggerState {
   callStack?: StackFrame[];
   storage?: Record<string, unknown>;
   args?: string;
+}
+
+export interface BreakpointCapabilities {
+  conditionalBreakpoints: boolean;
+  hitConditionalBreakpoints: boolean;
+  logPoints: boolean;
 }

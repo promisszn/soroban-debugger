@@ -28,6 +28,21 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Soroban Debugger",
+      "properties": {
+        "soroban-debugger.requestTimeoutMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "Per-request timeout (ms) for backend wire-protocol calls before the debug session fails as unhealthy."
+        },
+        "soroban-debugger.connectTimeoutMs": {
+          "type": "number",
+          "default": 10000,
+          "description": "Timeout (ms) to wait for the backend server to become reachable during launch."
+        }
+      }
+    },
     "debuggers": [
       {
         "type": "soroban",
@@ -45,22 +60,22 @@
             "properties": {
               "contractPath": {
                 "type": "string",
-                "description": "Path to Soroban contract WASM file",
+                "description": "Path to a readable Soroban contract WASM file",
                 "default": "${workspaceFolder}/target/wasm32-unknown-unknown/release/contract.wasm"
               },
               "snapshotPath": {
                 "type": "string",
-                "description": "Path to snapshot JSON file for simulator state",
+                "description": "Optional path to a readable snapshot JSON file for simulator state",
                 "default": "${workspaceFolder}/snapshot.json"
               },
               "entrypoint": {
                 "type": "string",
-                "description": "Smart contract function to debug",
+                "description": "Non-empty smart contract function name to debug",
                 "default": "main"
               },
               "args": {
                 "type": "array",
-                "description": "Arguments to pass to the contract function",
+                "description": "JSON-serializable arguments to pass to the contract function",
                 "default": []
               },
               "trace": {
@@ -70,7 +85,19 @@
               },
               "binaryPath": {
                 "type": "string",
-                "description": "Optional path to the soroban-debug binary to launch"
+                "description": "Optional path to a readable soroban-debug binary to launch"
+              },
+              "port": {
+                "type": "integer",
+                "description": "Optional TCP port for the debugger server. Must be between 1 and 65535.",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "token": {
+                "type": "string",
+                "description": "Optional single-line authentication token for the debugger server.",
+                "minLength": 1,
+                "pattern": ".*\\S.*"
               }
             }
           }

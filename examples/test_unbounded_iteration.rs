@@ -26,8 +26,7 @@ fn main() {
                     println!("  Description: {}", finding.description);
 
                     if let Some(confidence) = &finding.confidence {
-                        println!("  Confidence: {:?}", confidence.level);
-                        println!("  Rationale: {}", confidence.rationale);
+                        println!("  Confidence: {:.0}%", confidence * 100.0);
                     }
 
                     if let Some(context) = &finding.context {

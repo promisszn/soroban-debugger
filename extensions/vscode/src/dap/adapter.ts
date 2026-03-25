@@ -10,10 +10,12 @@ import { DebuggerState, Variable } from './protocol';
 import { VariableStore } from './variableStore';
 import { ResolvedBreakpoint, resolveSourceBreakpoints } from './sourceBreakpoints';
 import { LogOutputEvent, LogLevel } from '@vscode/debugadapter/lib/logger';
+import { LogManager, LogLevel as ManagerLogLevel, LogPhase } from '../debug/logManager';
 
 type LaunchRequestArgs = DebugProtocol.LaunchRequestArguments & DebuggerProcessConfig;
 
 export class SorobanDebugSession extends DebugSession {
+  private logManager: LogManager | undefined;
   private debuggerProcess: DebuggerProcess | null = null;
   private state: DebuggerState = {
     isRunning: false,
@@ -37,6 +39,7 @@ export class SorobanDebugSession extends DebugSession {
     response: DebugProtocol.InitializeResponse,
     args: DebugProtocol.InitializeRequestArguments
   ): void {
+    this.logManager?.log(ManagerLogLevel.Info, LogPhase.DAP, `InitializeRequest: ${JSON.stringify(args)}`);
     response.body = response.body || {};
     response.body.supportsConfigurationDoneRequest = true;
     response.body.supportsEvaluateForHovers = true;
@@ -44,9 +47,9 @@ export class SorobanDebugSession extends DebugSession {
     (response.body as any).supportsCancelRequest = true;
     response.body.supportsSetVariable = false;
     response.body.supportsSetExpression = false;
-    response.body.supportsConditionalBreakpoints = false;
-    response.body.supportsHitConditionalBreakpoints = false;
-    response.body.supportsLogPoints = false;
+    response.body.supportsConditionalBreakpoints = true;
+    response.body.supportsHitConditionalBreakpoints = true;
+    response.body.supportsLogPoints = true;
 
     this.sendResponse(response);
     this.sendEvent(new InitializedEvent());
@@ -56,7 +59,14 @@ export class SorobanDebugSession extends DebugSession {
     response: DebugProtocol.LaunchResponse,
     args: LaunchRequestArgs
   ): Promise<void> {
+    this.logManager?.log(ManagerLogLevel.Info, LogPhase.DAP, `LaunchRequest: ${JSON.stringify(args)}`);
     try {
+      const preflight = await validateLaunchConfig(args);
+      if (!preflight.ok) {
+        const issue = preflight.issues[0];
+        throw new Error(`${issue.message} Expected: ${issue.expected}`);
+      }
+
       this.debuggerProcess = new DebuggerProcess({
         contractPath: args.contractPath,
         snapshotPath: args.snapshotPath,
@@ -65,8 +75,10 @@ export class SorobanDebugSession extends DebugSession {
         trace: args.trace || false,
         binaryPath: args.binaryPath,
         port: args.port,
-        token: args.token
-      });
+        token: args.token,
+        requestTimeoutMs: args.requestTimeoutMs,
+        connectTimeoutMs: args.connectTimeoutMs
+      }, this.logManager);
 
       await this.debuggerProcess.start();
       this.state.isRunning = true;
@@ -74,19 +86,27 @@ export class SorobanDebugSession extends DebugSession {
       this.hasExecuted = false;
       this.variableStore.reset();
       this.exportedFunctions = await this.debuggerProcess.getContractFunctions();
+      this.backendCapabilities = await this.debuggerProcess.getCapabilities().catch(() => ({
+        conditionalBreakpoints: false,
+        hitConditionalBreakpoints: false,
+        logPoints: false
+      }));
 
       this.attachProcessListeners();
       this.sendResponse(response);
     } catch (error) {
+      const message = error instanceof DebuggerTimeoutError
+        ? `Failed to launch debugger (timeout): ${error.message}\n\nNext steps: ensure the backend process is running, reachable, and not stalled; then retry the session.`
+        : `Failed to launch debugger: ${error}`;
       this.sendErrorResponse(response, {
         id: 1001,
-        format: `Failed to launch debugger: ${error}`,
+        format: message,
         showUser: true
       });
     }
   }
 
-  protected async setBreakpointsRequest(
+  protected async setBreakPointsRequest(
     response: DebugProtocol.SetBreakpointsResponse,
     args: DebugProtocol.SetBreakpointsArguments
   ): Promise<void> {
@@ -134,21 +154,36 @@ export class SorobanDebugSession extends DebugSession {
         }
       }
 
-      await this.syncFunctionBreakpoints(
+      const managedBreakpoints: BreakpointLocation[] = breakpoints.map((bp, index) => {
+        const match = resolved.find((resolvedBreakpoint) => resolvedBreakpoint.line === bp.line);
+        return {
+          id: `${source}:${bp.line}:${bp.column ?? 1}:${index}`,
+          source,
+          line: bp.line,
+          column: bp.column,
+          functionName: match?.functionName,
+          condition: bp.condition,
+          hitCondition: bp.hitCondition,
+          logMessage: bp.logMessage
+        };
+      });
+
+      const syncErrors = await this.syncSourceBreakpoints(
+        source,
+        managedBreakpoints.filter((bp) => {
+          const match = resolved.find((resolvedBreakpoint) => resolvedBreakpoint.line === bp.line);
+          return Boolean(match?.verified && bp.functionName);
+        })
+      );
+
+      this.state.breakpoints.set(source, managedBreakpoints);
+      this.sourceFunctionBreakpoints.set(
         source,
         new Set(
           resolved
             .filter((bp) => bp.setBreakpoint && bp.functionName)
             .map((bp) => bp.functionName as string)
         )
-      );
-
-      this.state.breakpoints.set(source,
-        breakpoints.map((bp) => ({
-          source,
-          line: bp.line,
-          column: bp.column
-        }))
       );
 
       response.body = {
@@ -159,7 +194,7 @@ export class SorobanDebugSession extends DebugSession {
             line: match?.line ?? bp.line,
             column: bp.column,
             source: args.source,
-            message: match?.message
+            message: [match?.message, syncMessage, capabilityMessages].filter(Boolean).join(' ')
           };
         })
       };
@@ -251,6 +286,86 @@ export class SorobanDebugSession extends DebugSession {
     this.sendResponse(response);
   }
 
+   protected async evaluateRequest(
+    response: DebugProtocol.EvaluateResponse,
+    args: DebugProtocol.EvaluateArguments
+  ): Promise<void> {
+    const expression = (args.expression || '').trim();
+
+    try {
+      if (this.debuggerProcess && this.state.isPaused) {
+        await this.refreshState();
+      }
+
+      // 1. Check for "magic" variables (local overrides)
+      if (expression === 'args' || expression === 'Arguments') {
+        response.body = {
+          result: this.state.args ?? '(none)',
+          variablesReference: 0
+        };
+        this.sendResponse(response);
+        return;
+      }
+
+      if (expression === 'storage' || expression === 'Storage') {
+        const storageObject = Object.fromEntries(
+          (this.state.variables || []).map((v) => [v.name, v.value])
+        );
+        response.body = {
+          result: JSON.stringify(storageObject),
+          variablesReference: 0
+        };
+        this.sendResponse(response);
+        return;
+      }
+
+      if (expression.startsWith('storage.')) {
+        const key = expression.slice('storage.'.length);
+        const match = (this.state.variables || []).find((v) => v.name === key);
+        if (!match) {
+          throw new Error(`Unknown storage key: ${key}`);
+        }
+        response.body = {
+          result: match.value,
+          variablesReference: 0
+        };
+        this.sendResponse(response);
+        return;
+      }
+
+      // 2. Fall back to backend evaluation if available and paused
+      if (this.debuggerProcess && this.state.isPaused) {
+        const result = await this.debuggerProcess.evaluate(args.expression, args.frameId);
+        response.body = {
+          result: result.result,
+          type: result.type,
+          variablesReference: result.variablesReference
+        };
+        this.sendResponse(response);
+        return;
+      }
+
+      throw new Error('Unsupported expression or debugger not paused. Try `args`, `storage`, or `storage.<key>`.');
+    } catch (error) {
+      if (error instanceof DebuggerTimeoutError) {
+        this.sendErrorResponse(response, {
+          id: 1010,
+          format:
+            `Evaluate timed out (${error.requestType}). The backend may be stalled.\n\n` +
+            `Next steps: restart the debug session; if it persists, verify the backend binary and connectivity.`,
+          showUser: true
+        });
+        return;
+      }
+
+      this.sendErrorResponse(response, {
+        id: 1010,
+        format: `Evaluate failed: ${error}`,
+        showUser: false
+      });
+    }
+  }
+
   protected async continueRequest(
     response: DebugProtocol.ContinueResponse,
     args: DebugProtocol.ContinueArguments
@@ -283,6 +398,17 @@ export class SorobanDebugSession extends DebugSession {
       this.sendEvent(new ExitedEvent(0));
       await this.stop();
     } catch (error) {
+      if (error instanceof DebuggerTimeoutError) {
+        this.sendEvent(new LogOutputEvent(
+          `Debugger request timed out (${error.requestType}). The backend may be stalled or the connection is unhealthy.\n` +
+          `Next steps: restart the debug session; if it persists, verify the backend binary and network connectivity.\n`,
+          LogLevel.Error
+        ));
+        this.sendEvent(new ExitedEvent(1));
+        await this.stop();
+        return;
+      }
+
       this.sendErrorResponse(response, {
         id: 1002,
         format: `Continue failed: ${error}`,
@@ -312,7 +438,7 @@ export class SorobanDebugSession extends DebugSession {
     await this.stepOnce(response, 'step out');
   }
 
-  protected async threadRequest(
+  protected async threadsRequest(
     response: DebugProtocol.ThreadsResponse
   ): Promise<void> {
     response.body = {
@@ -328,28 +454,6 @@ export class SorobanDebugSession extends DebugSession {
     response: DebugProtocol.ConfigurationDoneResponse,
     args: DebugProtocol.ConfigurationDoneArguments
   ): Promise<void> {
-    if (this.debuggerProcess) {
-      await this.refreshState();
-      this.state.isPaused = true;
-      this.sendEvent(new StoppedEvent('entry', this.threadId));
-    }
-
-    this.sendResponse(response);
-  }
-
-  protected async evaluateRequest(
-    response: DebugProtocol.EvaluateResponse,
-    args: DebugProtocol.EvaluateArguments
-  ): Promise<void> {
-    if (!this.debuggerProcess || !this.state.isPaused) {
-      this.sendErrorResponse(response, {
-        id: 1004,
-        format: 'Evaluation is only available when the debugger is paused',
-        showUser: true
-      });
-      return;
-    }
-
     try {
       const requestSeq = (response as any).request_seq as number | undefined;
       const controller = new AbortController();
@@ -376,9 +480,9 @@ export class SorobanDebugSession extends DebugSession {
         return;
       }
       this.sendErrorResponse(response, {
-        id: 1005,
-        format: `${error}`,
-        showUser: false
+        id: 1009,
+        format: `Configuration failed: ${error}`,
+        showUser: true
       });
     } finally {
       const requestSeq = (response as any).request_seq as number | undefined;
@@ -405,6 +509,7 @@ export class SorobanDebugSession extends DebugSession {
     response: DebugProtocol.DisconnectResponse,
     args: DebugProtocol.DisconnectArguments
   ): Promise<void> {
+    this.logManager?.log(ManagerLogLevel.Info, LogPhase.DAP, `DisconnectRequest: ${JSON.stringify(args)}`);
     await this.stop();
     this.sendResponse(response);
   }
@@ -420,6 +525,7 @@ export class SorobanDebugSession extends DebugSession {
       });
 
       reader.on('line', (line: string) => {
+        this.logManager?.log(ManagerLogLevel.Debug, LogPhase.Backend, line);
         this.sendEvent(new LogOutputEvent(line + '\n', LogLevel.Log));
       });
       this.outputReaders.push(reader);
@@ -433,6 +539,7 @@ export class SorobanDebugSession extends DebugSession {
       });
 
       reader.on('line', (line: string) => {
+        this.logManager?.log(ManagerLogLevel.Error, LogPhase.Backend, line);
         this.sendEvent(new LogOutputEvent(line + '\n', LogLevel.Error));
       });
       this.outputReaders.push(reader);
@@ -502,44 +609,54 @@ export class SorobanDebugSession extends DebugSession {
       this.sendEvent(new ExitedEvent(0));
       await this.stop();
     } catch (error) {
+      if (error instanceof DebuggerTimeoutError) {
+        this.sendEvent(new LogOutputEvent(
+          `${label} timed out (${error.requestType}). The backend may be stalled.\n` +
+          `Next steps: restart the debug session.\n`,
+          LogLevel.Error
+        ));
+        this.sendEvent(new ExitedEvent(1));
+        await this.stop();
+        return;
+      }
+
       this.sendEvent(new LogOutputEvent(`${label} failed: ${error}\n`, LogLevel.Error));
     }
   }
 
-  private async syncFunctionBreakpoints(source: string, nextFunctions: Set<string>): Promise<void> {
+  private async syncSourceBreakpoints(
+    source: string,
+    nextBreakpoints: BreakpointLocation[]
+  ): Promise<Map<string, string>> {
     if (!this.debuggerProcess) {
-      return;
+      return new Map();
     }
 
-    const previousFunctions = this.sourceFunctionBreakpoints.get(source) || new Set<string>();
+    const previousBreakpoints = this.state.breakpoints.get(source) || [];
+    const errors = new Map<string, string>();
 
-    for (const functionName of previousFunctions) {
-      if (nextFunctions.has(functionName)) {
-        continue;
-      }
+    for (const breakpoint of previousBreakpoints) {
+      await this.debuggerProcess.clearBreakpoint(breakpoint.id);
+    }
 
-      const count = (this.functionBreakpointRefCounts.get(functionName) || 1) - 1;
-      if (count <= 0) {
-        await this.debuggerProcess.clearBreakpoint(functionName);
-        this.functionBreakpointRefCounts.delete(functionName);
-      } else {
-        this.functionBreakpointRefCounts.set(functionName, count);
+    for (const breakpoint of nextBreakpoints) {
+      try {
+        await this.debuggerProcess.setBreakpoint({
+          id: breakpoint.id,
+          functionName: breakpoint.functionName as string,
+          condition: breakpoint.condition,
+          hitCondition: breakpoint.hitCondition,
+          logMessage: breakpoint.logMessage
+        });
+      } catch (error) {
+        errors.set(
+          breakpoint.id,
+          error instanceof Error ? error.message : String(error)
+        );
       }
     }
 
-    for (const functionName of nextFunctions) {
-      if (previousFunctions.has(functionName)) {
-        continue;
-      }
-
-      const count = this.functionBreakpointRefCounts.get(functionName) || 0;
-      if (count === 0) {
-        await this.debuggerProcess.setBreakpoint(functionName);
-      }
-      this.functionBreakpointRefCounts.set(functionName, count + 1);
-    }
-
-    this.sourceFunctionBreakpoints.set(source, nextFunctions);
+    return errors;
   }
 
   private async refreshState(): Promise<void> {
@@ -630,6 +747,21 @@ export class SorobanDebugSession extends DebugSession {
     this.state.args = undefined;
     this.hasExecuted = false;
     this.sourceFunctionBreakpoints.clear();
-    this.functionBreakpointRefCounts.clear();
+  }
+
+  private describeCapabilityFallback(bp: DebugProtocol.SourceBreakpoint): string | undefined {
+    const notices: string[] = [];
+
+    if (bp.condition && !this.backendCapabilities.conditionalBreakpoints) {
+      notices.push('Conditional evaluation is unavailable in the current backend.');
+    }
+    if (bp.hitCondition && !this.backendCapabilities.hitConditionalBreakpoints) {
+      notices.push('Hit-count filtering is unavailable in the current backend.');
+    }
+    if (bp.logMessage && !this.backendCapabilities.logPoints) {
+      notices.push('Logpoints are unavailable in the current backend.');
+    }
+
+    return notices.length > 0 ? notices.join(' ') : undefined;
   }
 }
