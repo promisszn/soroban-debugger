@@ -352,6 +352,14 @@ npm test
 npm run vscode:prepublish
 ```
 
+### Developer Workflow (Local CI)
+
+Before opening a pull request, you must ensure your code passes all continuous integration (CI) gates. To make this easy, we have bundled all formatting, linting, and testing into a single command.
+
+Run this from the root of the repository:
+```bash
+make ci-local
+
 ### Project Structure
 
 ```

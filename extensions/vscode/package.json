@@ -155,7 +155,8 @@
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
     "test": "node ./dist/test/runTest.js",
-    "build": "npm run compile"
+    "build": "npm run compile",
+    "ci": "npm run build && npm run test"
   },
   "devDependencies": {
     "@types/node": "^20.19.37",
