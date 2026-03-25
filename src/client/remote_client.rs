@@ -600,6 +600,7 @@ enum SendFailure {
     Disconnected,
     Timeout {
         stage: &'static str,
+        #[allow(dead_code)]
         timeout: Duration,
     },
     Io {
@@ -699,6 +700,7 @@ fn parse_response_line(expected_id: u64, response_line: &str) -> Result<DebugRes
     Ok(response)
 }
 
+#[allow(dead_code)]
 fn sanitize_auth_message(message: &str, token: &str) -> String {
     if token.is_empty() {
         return message.to_string();

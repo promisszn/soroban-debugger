@@ -528,7 +528,7 @@ impl SecurityRule for UnboundedIterationRule {
             return Ok(Vec::new());
         }
 
-        let mut finding = SecurityFinding {
+        let finding = SecurityFinding {
             rule_id: self.name().to_string(),
             severity: Severity::High,
             location: "WASM code section".to_string(),
@@ -596,10 +596,10 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
     let mut signal = UnboundedStaticSignal::default();
 
     let mut storage_calls_in_loops = 0usize;
-    let mut storage_calls_outside_loops = 0usize;
+    let mut _storage_calls_outside_loops = 0usize;
     let mut loop_types_with_calls: HashSet<String> = HashSet::new();
     let mut loop_types_seen: HashSet<String> = HashSet::new();
-    let mut conditional_branches = 0usize;
+    let mut _conditional_branches = 0usize;
 
     for payload in Parser::new(0).parse_all(wasm_bytes) {
         let Ok(payload) = payload else {
@@ -649,7 +649,7 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
                             control_flow_stack.push(ControlFlowFrame::Block);
                         }
                         Operator::If { .. } => {
-                            conditional_branches += 1;
+                            _conditional_branches += 1;
                             control_flow_stack.push(ControlFlowFrame::If);
                         }
                         Operator::Else => {}
@@ -674,12 +674,12 @@ fn analyze_unbounded_iteration_static(wasm_bytes: &[u8]) -> UnboundedStaticSigna
                                         }
                                     }
                                 } else {
-                                    storage_calls_outside_loops += 1;
+                                    _storage_calls_outside_loops += 1;
                                 }
                             }
                         }
                         Operator::BrIf { .. } => {
-                            conditional_branches += 1;
+                            _conditional_branches += 1;
                         }
                         _ => {}
                     }
