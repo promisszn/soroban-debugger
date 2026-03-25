@@ -101,11 +101,6 @@ impl SourceMap {
                         self.get_file_path(&dwarf, &unit, header, row.file_index())
                     {
                         // In WASM, DWARF addresses are usually offsets into the code section
-                        let offset = row.address() as usize;
-                        let line = row.line().map(|l: std::num::NonZeroU64| l.get() as u32).unwrap_or(0);
-                        let column = match row.column() {
-                            gimli::ColumnType::LeftEdge => None,
-                            gimli::ColumnType::Column(c) => Some(c.get() as u32),
                         let offset =
                             self.normalize_wasm_offset(row.address() as usize, wasm_bytes.len());
                         let line = row.line().map(|l| l.get() as u32).unwrap_or(0);
@@ -229,8 +224,3 @@ impl SourceMap {
     }
 }
 
-impl Default for SourceMap {
-    fn default() -> Self {
-        Self::new()
-    }
-}

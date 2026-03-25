@@ -374,7 +374,6 @@ impl SecurityRule for ReentrancyPatternRule {
     ) -> Result<Vec<SecurityFinding>> {
         Ok(analyze_reentrancy_pattern_dynamic(trace))
     }
-    Vec::new()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -755,7 +754,6 @@ fn is_storage_read_import(module: &str, name: &str) -> bool {
         if n == *base {
             return true;
         }
-        if let Some(suffix) = n.strip_prefix(base) {
         // Handle prefix-qualified names like "contract_storage_get" or "soroban_storage_has"
         if n.ends_with(base) {
             return true;

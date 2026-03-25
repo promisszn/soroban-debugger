@@ -101,7 +101,6 @@ impl Stepper {
         }
 
         false
-        debug_state.next_instruction().is_some()
     }
 
     pub fn step_out(&mut self, debug_state: &mut DebugState) -> bool {
@@ -141,26 +140,11 @@ impl Stepper {
         if self.pause_next {
             return true;
         }
-        match self.step_mode {
-            StepMode::StepInto => true,
-            StepMode::StepOver => {
-                let depth = debug_state.instruction_pointer().call_stack_depth();
-                depth <= debug_state.instruction_pointer().call_stack_depth()
-            }
-            StepMode::StepOut => {
-                let depth = debug_state.instruction_pointer().call_stack_depth();
-                depth < debug_state.instruction_pointer().call_stack_depth()
-                // Delegate to the instruction pointer which holds the stored target depth
-                debug_state
-                    .instruction_pointer()
-                    .should_pause_at(instruction)
-            }
-            StepMode::StepBlock => {
-                // Pause at control flow instructions
-                instruction.is_control_flow()
-            }
-            StepMode::StepBlock => instruction.is_control_flow(),
-        }
+        // InstructionPointer owns the correct "where do we pause?" semantics
+        // for each step mode (including stored target depths for step over/out).
+        debug_state
+            .instruction_pointer()
+            .should_pause_at(instruction)
     }
 
     pub fn on_instruction(
@@ -194,8 +178,11 @@ impl Stepper {
                 return true;
             }
             if !strictly_lower && depth <= target {
-    // Removed find_next_instruction_at_depth
-
+                return true;
+            }
+        }
+        false
+    }
     /// Find next instruction at lower call depth (step out)
     fn find_next_instruction_at_lower_depth(&self, debug_state: &mut DebugState) -> bool {
         let current_depth = debug_state.instruction_pointer().call_stack_depth();

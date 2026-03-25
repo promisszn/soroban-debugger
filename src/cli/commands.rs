@@ -413,6 +413,100 @@ fn run_batch(args: &RunArgs, batch_file: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Execute remote run mode
+fn run_remote(args: &RunArgs, output_writer: &mut OutputWriter, remote_addr: &str) -> Result<()> {
+    print_info(format!("Connecting to remote debugger at {}", remote_addr));
+    let mut client = crate::client::RemoteClient::connect(remote_addr, args.token.clone())?;
+
+    if let Some(contract) = &args.contract {
+        print_info(format!("Loading contract on remote: {:?}", contract));
+        output_writer.write(&format!("Loading contract on remote: {:?}", contract))?;
+        let size = client.load_contract(&contract.to_string_lossy())?;
+        print_success(format!("Contract loaded on remote: {} bytes", size));
+    }
+
+    if let Some(snapshot_path) = &args.network_snapshot {
+        print_info(format!("Loading network snapshot on remote: {:?}", snapshot_path));
+        client.load_snapshot(&snapshot_path.to_string_lossy())?;
+    }
+
+    let function = match &args.function {
+        Some(f) => f.clone(),
+        None => {
+            client.ping()?;
+            print_success("Remote debugger is reachable");
+            return Ok(());
+        }
+    };
+
+    let parsed_args = if let Some(args_json) = &args.args {
+        Some(parse_args(args_json)?)
+    } else {
+        None
+    };
+
+    if let Some(storage_json) = &args.storage {
+        let storage = parse_storage(storage_json)?;
+        client.set_storage(&storage)?;
+    } else if let Some(import_path) = &args.import_storage {
+        let imported = crate::inspector::storage::StorageState::import_from_file(import_path)?;
+        let storage_str = serde_json::to_string(&imported).map_err(|e| {
+            DebuggerError::StorageError(format!("Failed to serialize imported storage: {}", e))
+        })?;
+        client.set_storage(&storage_str)?;
+    }
+
+    print_info("\n--- Remote Execution Start ---\n");
+    let storage_before_str = client.get_storage()?;
+    let storage_before: std::collections::HashMap<String, String> = serde_json::from_str(&storage_before_str)
+        .unwrap_or_default();
+
+    let result = client.execute(&function, parsed_args.as_deref())?;
+
+    let storage_after_str = client.get_storage()?;
+    let storage_after: std::collections::HashMap<String, String> = serde_json::from_str(&storage_after_str)
+        .unwrap_or_default();
+
+    let (cpu, mem) = client.get_budget()?;
+
+    print_success("\n--- Remote Execution Complete ---\n");
+    print_result(format!("Result: {:?}", result));
+
+    let storage_diff = crate::inspector::storage::StorageInspector::compute_diff(
+        &storage_before,
+        &storage_after,
+        &args.alert_on_change
+    );
+    if !storage_diff.is_empty() || !args.alert_on_change.is_empty() {
+        print_info("\n--- Storage Changes ---");
+        crate::inspector::storage::StorageInspector::display_diff(&storage_diff);
+    }
+
+    if args.is_json_output() {
+        let output = serde_json::json!({
+            "status": "success",
+            "result": result,
+            "budget": {
+                "cpu_instructions": cpu,
+                "memory_bytes": mem,
+            },
+            "storage_diff": storage_diff,
+        });
+        match serde_json::to_string_pretty(&output) {
+            Ok(json) => println!("{}", json),
+            Err(e) => {
+                let err_out = serde_json::json!({
+                    "status": "error",
+                    "errors": [e.to_string()]
+                });
+                println!("{}", serde_json::to_string_pretty(&err_out).unwrap_or_default());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Execute the run command.
 #[tracing::instrument(skip_all, fields(contract = ?args.contract, function = args.function))]
 pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
@@ -436,6 +530,10 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
 
     if args.dry_run {
         return run_dry_run(&args);
+    }
+
+    if let Some(remote_addr) = &args.remote {
+        return run_remote(&args, &mut output_writer, remote_addr);
     }
 
     let contract = args
@@ -551,16 +649,6 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     let mut engine = DebuggerEngine::new(executor, args.breakpoint.clone());
 
     // Server mode is handled at the beginning of the function
-    // Remote mode is not yet implemented
-
-    if args.remote.is_some() {
-        return Err(
-            DebuggerError::ExecutionError(
-                "Remote mode not yet implemented in run command".to_string()
-            ).into()
-        );
-    }
-
     // Execute locally with debugging
     if !args.is_json_output() {
         println!("\n--- Execution Start ---\n");
