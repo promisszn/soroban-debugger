@@ -243,7 +243,11 @@ impl RemoteClient {
     /// Set a breakpoint
     pub fn set_breakpoint(&mut self, function: &str) -> Result<()> {
         let response = self.send_request(DebugRequest::SetBreakpoint {
+            id: function.to_string(),
             function: function.to_string(),
+            condition: None,
+            hit_condition: None,
+            log_message: None,
         })?;
 
         match response {
@@ -262,7 +266,7 @@ impl RemoteClient {
     /// Clear a breakpoint
     pub fn clear_breakpoint(&mut self, function: &str) -> Result<()> {
         let response = self.send_request(DebugRequest::ClearBreakpoint {
-            function: function.to_string(),
+            id: function.to_string(),
         })?;
 
         match response {
@@ -283,7 +287,9 @@ impl RemoteClient {
         let response = self.send_request(DebugRequest::ListBreakpoints)?;
 
         match response {
-            DebugResponse::BreakpointsList { breakpoints } => Ok(breakpoints),
+            DebugResponse::BreakpointsList { breakpoints } => {
+                Ok(breakpoints.into_iter().map(|breakpoint| breakpoint.function).collect())
+            }
             DebugResponse::Error { message } => Err(DebuggerError::ExecutionError(message).into()),
             _ => Err(DebuggerError::ExecutionError(
                 "Unexpected response to ListBreakpoints".to_string(),

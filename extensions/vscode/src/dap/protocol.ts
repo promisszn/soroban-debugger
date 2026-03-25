@@ -1,7 +1,12 @@
 export interface BreakpointLocation {
+  id: string;
   source: string;
   line: number;
   column?: number;
+  functionName?: string;
+  condition?: string;
+  hitCondition?: string;
+  logMessage?: string;
 }
 
 export interface StackFrame {
@@ -64,4 +69,10 @@ export interface DebuggerState {
   callStack?: StackFrame[];
   variables?: Variable[];
   args?: string;
+}
+
+export interface BreakpointCapabilities {
+  conditionalBreakpoints: boolean;
+  hitConditionalBreakpoints: boolean;
+  logPoints: boolean;
 }

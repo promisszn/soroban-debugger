@@ -6,7 +6,7 @@ import {
 import { DebugProtocol } from '@vscode/debugprotocol';
 import * as readline from 'readline';
 import { DebuggerProcess, DebuggerProcessConfig } from '../cli/debuggerProcess';
-import { DebuggerState, Variable } from './protocol';
+import { BreakpointCapabilities, BreakpointLocation, DebuggerState, Variable } from './protocol';
 import { ResolvedBreakpoint, resolveSourceBreakpoints } from './sourceBreakpoints';
 import { LogOutputEvent, LogLevel } from '@vscode/debugadapter/lib/logger';
 
@@ -28,7 +28,11 @@ export class SorobanDebugSession extends DebugSession {
   private hasExecuted = false;
   private exportedFunctions = new Set<string>();
   private sourceFunctionBreakpoints = new Map<string, Set<string>>();
-  private functionBreakpointRefCounts = new Map<string, number>();
+  private backendCapabilities: BreakpointCapabilities = {
+    conditionalBreakpoints: true,
+    hitConditionalBreakpoints: true,
+    logPoints: true
+  };
 
   protected initializeRequest(
     response: DebugProtocol.InitializeResponse,
@@ -39,9 +43,9 @@ export class SorobanDebugSession extends DebugSession {
     response.body.supportsEvaluateForHovers = true;
     response.body.supportsSetVariable = false;
     response.body.supportsSetExpression = false;
-    response.body.supportsConditionalBreakpoints = false;
-    response.body.supportsHitConditionalBreakpoints = false;
-    response.body.supportsLogPoints = false;
+    response.body.supportsConditionalBreakpoints = true;
+    response.body.supportsHitConditionalBreakpoints = true;
+    response.body.supportsLogPoints = true;
 
     this.sendResponse(response);
     this.sendEvent(new InitializedEvent());
@@ -70,6 +74,11 @@ export class SorobanDebugSession extends DebugSession {
       this.variableHandles.clear();
       this.nextVarHandle = 1;
       this.exportedFunctions = await this.debuggerProcess.getContractFunctions();
+      this.backendCapabilities = await this.debuggerProcess.getCapabilities().catch(() => ({
+        conditionalBreakpoints: false,
+        hitConditionalBreakpoints: false,
+        logPoints: false
+      }));
 
       this.attachProcessListeners();
       this.sendResponse(response);
@@ -99,32 +108,50 @@ export class SorobanDebugSession extends DebugSession {
             message: 'Debugger is not launched or source path is unavailable'
           }));
 
-      await this.syncFunctionBreakpoints(
-        source,
-        new Set(
-          resolved
-            .filter((bp) => bp.verified && bp.functionName)
-            .map((bp) => bp.functionName as string)
-        )
-      );
-
-      this.state.breakpoints.set(source,
-        breakpoints.map((bp) => ({
+      const managedBreakpoints: BreakpointLocation[] = breakpoints.map((bp, index) => {
+        const match = resolved.find((resolvedBreakpoint) => resolvedBreakpoint.line === bp.line);
+        return {
+          id: `${source}:${bp.line}:${bp.column ?? 1}:${index}`,
           source,
           line: bp.line,
-          column: bp.column
-        }))
+          column: bp.column,
+          functionName: match?.functionName,
+          condition: bp.condition,
+          hitCondition: bp.hitCondition,
+          logMessage: bp.logMessage
+        };
+      });
+
+      const syncErrors = await this.syncSourceBreakpoints(
+        source,
+        managedBreakpoints.filter((bp) => {
+          const match = resolved.find((resolvedBreakpoint) => resolvedBreakpoint.line === bp.line);
+          return Boolean(match?.verified && bp.functionName);
+        })
+      );
+
+      this.state.breakpoints.set(source, managedBreakpoints);
+      this.sourceFunctionBreakpoints.set(
+        source,
+        new Set(
+          managedBreakpoints
+            .filter((bp) => Boolean(bp.functionName) && !syncErrors.has(bp.id))
+            .map((bp) => bp.functionName as string)
+        )
       );
 
       response.body = {
         breakpoints: breakpoints.map((bp) => {
           const match = resolved.find((resolvedBreakpoint) => resolvedBreakpoint.line === bp.line);
+          const managed = managedBreakpoints.find((candidate) => candidate.line === bp.line);
+          const capabilityMessages = this.describeCapabilityFallback(bp);
+          const syncMessage = managed ? syncErrors.get(managed.id) : undefined;
           return {
-            verified: match?.verified ?? false,
+            verified: (match?.verified ?? false) && !syncMessage,
             line: bp.line,
             column: bp.column,
             source: args.source,
-            message: match?.message
+            message: [match?.message, syncMessage, capabilityMessages].filter(Boolean).join(' ')
           };
         })
       };
@@ -434,40 +461,39 @@ export class SorobanDebugSession extends DebugSession {
     }
   }
 
-  private async syncFunctionBreakpoints(source: string, nextFunctions: Set<string>): Promise<void> {
+  private async syncSourceBreakpoints(
+    source: string,
+    nextBreakpoints: BreakpointLocation[]
+  ): Promise<Map<string, string>> {
     if (!this.debuggerProcess) {
-      return;
+      return new Map();
     }
 
-    const previousFunctions = this.sourceFunctionBreakpoints.get(source) || new Set<string>();
+    const previousBreakpoints = this.state.breakpoints.get(source) || [];
+    const errors = new Map<string, string>();
 
-    for (const functionName of previousFunctions) {
-      if (nextFunctions.has(functionName)) {
-        continue;
-      }
+    for (const breakpoint of previousBreakpoints) {
+      await this.debuggerProcess.clearBreakpoint(breakpoint.id);
+    }
 
-      const count = (this.functionBreakpointRefCounts.get(functionName) || 1) - 1;
-      if (count <= 0) {
-        await this.debuggerProcess.clearBreakpoint(functionName);
-        this.functionBreakpointRefCounts.delete(functionName);
-      } else {
-        this.functionBreakpointRefCounts.set(functionName, count);
+    for (const breakpoint of nextBreakpoints) {
+      try {
+        await this.debuggerProcess.setBreakpoint({
+          id: breakpoint.id,
+          functionName: breakpoint.functionName as string,
+          condition: breakpoint.condition,
+          hitCondition: breakpoint.hitCondition,
+          logMessage: breakpoint.logMessage
+        });
+      } catch (error) {
+        errors.set(
+          breakpoint.id,
+          error instanceof Error ? error.message : String(error)
+        );
       }
     }
 
-    for (const functionName of nextFunctions) {
-      if (previousFunctions.has(functionName)) {
-        continue;
-      }
-
-      const count = this.functionBreakpointRefCounts.get(functionName) || 0;
-      if (count === 0) {
-        await this.debuggerProcess.setBreakpoint(functionName);
-      }
-      this.functionBreakpointRefCounts.set(functionName, count + 1);
-    }
-
-    this.sourceFunctionBreakpoints.set(source, nextFunctions);
+    return errors;
   }
 
   private async refreshState(): Promise<void> {
@@ -610,6 +636,21 @@ export class SorobanDebugSession extends DebugSession {
     this.state.args = undefined;
     this.hasExecuted = false;
     this.sourceFunctionBreakpoints.clear();
-    this.functionBreakpointRefCounts.clear();
+  }
+
+  private describeCapabilityFallback(bp: DebugProtocol.SourceBreakpoint): string | undefined {
+    const notices: string[] = [];
+
+    if (bp.condition && !this.backendCapabilities.conditionalBreakpoints) {
+      notices.push('Conditional evaluation is unavailable in the current backend.');
+    }
+    if (bp.hitCondition && !this.backendCapabilities.hitConditionalBreakpoints) {
+      notices.push('Hit-count filtering is unavailable in the current backend.');
+    }
+    if (bp.logMessage && !this.backendCapabilities.logPoints) {
+      notices.push('Logpoints are unavailable in the current backend.');
+    }
+
+    return notices.length > 0 ? notices.join(' ') : undefined;
   }
 }

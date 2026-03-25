@@ -154,7 +154,7 @@ impl DebuggerUI {
                 if parts.len() < 2 {
                     tracing::warn!("breakpoint set without function name");
                 } else {
-                    self.engine.breakpoints_mut().add(parts[1]);
+                    self.engine.breakpoints_mut().add_simple(parts[1]);
                     crate::logging::log_breakpoint_set(parts[1]);
                 }
             }
@@ -177,7 +177,7 @@ impl DebuggerUI {
             "clear" => {
                 if parts.len() < 2 {
                     tracing::warn!("clear command missing function name");
-                } else if self.engine.breakpoints_mut().remove(parts[1]) {
+                } else if self.engine.breakpoints_mut().remove_function(parts[1]) {
                     crate::logging::log_breakpoint_cleared(parts[1]);
                 } else {
                     tracing::debug!(breakpoint = parts[1], "No breakpoint found at function");

@@ -33,6 +33,22 @@ pub struct SourceLocation {
     pub column: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BreakpointCapabilities {
+    pub conditional_breakpoints: bool,
+    pub hit_conditional_breakpoints: bool,
+    pub log_points: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BreakpointDescriptor {
+    pub id: String,
+    pub function: String,
+    pub condition: Option<String>,
+    pub hit_condition: Option<String>,
+    pub log_message: Option<String>,
+}
+
 /// Wire protocol messages for remote debugging
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -74,13 +90,22 @@ pub enum DebugRequest {
     GetBudget,
 
     /// Set a breakpoint
-    SetBreakpoint { function: String },
+    SetBreakpoint {
+        id: String,
+        function: String,
+        condition: Option<String>,
+        hit_condition: Option<String>,
+        log_message: Option<String>,
+    },
 
     /// Clear a breakpoint
-    ClearBreakpoint { function: String },
+    ClearBreakpoint { id: String },
 
     /// List all breakpoints
     ListBreakpoints,
+
+    /// Get backend debugging capabilities
+    GetCapabilities,
 
     /// Set initial storage
     SetStorage { storage_json: String },
@@ -161,13 +186,18 @@ pub enum DebugResponse {
     },
 
     /// Breakpoint set
-    BreakpointSet { function: String },
+    BreakpointSet { id: String, function: String },
 
     /// Breakpoint cleared
-    BreakpointCleared { function: String },
+    BreakpointCleared { id: String },
 
     /// List of breakpoints
-    BreakpointsList { breakpoints: Vec<String> },
+    BreakpointsList { breakpoints: Vec<BreakpointDescriptor> },
+
+    /// Backend capabilities
+    Capabilities {
+        breakpoints: BreakpointCapabilities,
+    },
 
     /// Snapshot loaded
     SnapshotLoaded { summary: String },

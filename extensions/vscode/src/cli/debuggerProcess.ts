@@ -34,6 +34,12 @@ export interface DebuggerContinueResult {
   paused: boolean;
 }
 
+export interface BackendBreakpointCapabilities {
+  conditionalBreakpoints: boolean;
+  hitConditionalBreakpoints: boolean;
+  logPoints: boolean;
+}
+
 type DebugRequest =
   | { type: 'Authenticate'; token: string }
   | { type: 'LoadContract'; contract_path: string }
@@ -44,12 +50,20 @@ type DebugRequest =
   | { type: 'Continue' }
   | { type: 'Inspect' }
   | { type: 'GetStorage' }
-  | { type: 'SetBreakpoint'; function: string }
-  | { type: 'ClearBreakpoint'; function: string }
+  | {
+      type: 'SetBreakpoint';
+      id: string;
+      function: string;
+      condition?: string;
+      hit_condition?: string;
+      log_message?: string;
+    }
+  | { type: 'ClearBreakpoint'; id: string }
   | { type: 'Evaluate'; expression: string; frame_id?: number }
   | { type: 'Ping' }
   | { type: 'Disconnect' }
-  | { type: 'LoadSnapshot'; snapshot_path: string };
+  | { type: 'LoadSnapshot'; snapshot_path: string }
+  | { type: 'GetCapabilities' };
 
 type DebugResponse =
   | { type: 'Authenticated'; success: boolean; message: string }
@@ -60,9 +74,27 @@ type DebugResponse =
   | { type: 'InspectionResult'; function?: string; args?: string; step_count: number; paused: boolean; call_stack: string[] }
   | { type: 'StorageState'; storage_json: string }
   | { type: 'SnapshotLoaded'; summary: string }
-  | { type: 'BreakpointSet'; function: string }
-  | { type: 'BreakpointCleared'; function: string }
+  | { type: 'BreakpointSet'; id: string; function: string }
+  | { type: 'BreakpointCleared'; id: string }
+  | {
+      type: 'BreakpointsList';
+      breakpoints: Array<{
+        id: string;
+        function: string;
+        condition?: string;
+        hit_condition?: string;
+        log_message?: string;
+      }>;
+    }
   | { type: 'EvaluateResult'; result: string; result_type?: string; variables_reference: number }
+  | {
+      type: 'Capabilities';
+      breakpoints: {
+        conditional_breakpoints: boolean;
+        hit_conditional_breakpoints: boolean;
+        log_points: boolean;
+      };
+    }
   | { type: 'Pong' }
   | { type: 'Disconnected' }
   | { type: 'Error'; message: string };
@@ -223,18 +255,38 @@ export class DebuggerProcess {
     this.expectResponse(response, 'Pong');
   }
 
-  async setBreakpoint(functionName: string): Promise<void> {
+  async getCapabilities(): Promise<BackendBreakpointCapabilities> {
+    const response = await this.sendRequest({ type: 'GetCapabilities' });
+    this.expectResponse(response, 'Capabilities');
+    return {
+      conditionalBreakpoints: response.breakpoints.conditional_breakpoints,
+      hitConditionalBreakpoints: response.breakpoints.hit_conditional_breakpoints,
+      logPoints: response.breakpoints.log_points
+    };
+  }
+
+  async setBreakpoint(breakpoint: {
+    id: string;
+    functionName: string;
+    condition?: string;
+    hitCondition?: string;
+    logMessage?: string;
+  }): Promise<void> {
     const response = await this.sendRequest({
       type: 'SetBreakpoint',
-      function: functionName
+      id: breakpoint.id,
+      function: breakpoint.functionName,
+      condition: breakpoint.condition,
+      hit_condition: breakpoint.hitCondition,
+      log_message: breakpoint.logMessage
     });
     this.expectResponse(response, 'BreakpointSet');
   }
 
-  async clearBreakpoint(functionName: string): Promise<void> {
+  async clearBreakpoint(breakpointId: string): Promise<void> {
     const response = await this.sendRequest({
       type: 'ClearBreakpoint',
-      function: functionName
+      id: breakpointId
     });
     this.expectResponse(response, 'BreakpointCleared');
   }
