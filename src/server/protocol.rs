@@ -73,6 +73,8 @@ pub fn negotiate_protocol_version(
     Ok(negotiated_max)
 }
 
+use crate::debugger::SourceBreakpointResolution;
+
 /// Structured event category used by dynamic security analysis.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum DynamicTraceEventKind {
@@ -94,6 +96,8 @@ pub struct DynamicTraceEvent {
     pub message: String,
     pub caller: Option<String>,
     pub function: Option<String>,
+    #[serde(default)]
+    pub call_depth: Option<usize>,
     pub storage_key: Option<String>,
     pub storage_value: Option<String>,
 }
@@ -193,8 +197,12 @@ pub enum DebugRequest {
     /// List all breakpoints
     ListBreakpoints,
 
-    /// Get backend debugging capabilities
-    GetCapabilities,
+    /// Resolve source breakpoints (file + line) into concrete exported function breakpoints.
+    ResolveSourceBreakpoints {
+        source_path: String,
+        lines: Vec<u32>,
+        exported_functions: Vec<String>,
+    },
 
     /// Set initial storage
     SetStorage { storage_json: String },
@@ -317,6 +325,11 @@ pub enum DebugResponse {
 
     /// Backend capabilities
     Capabilities { breakpoints: BreakpointCapabilities },
+
+    /// Resolved source breakpoints.
+    SourceBreakpointsResolved {
+        breakpoints: Vec<SourceBreakpointResolution>,
+    },
 
     /// Snapshot loaded
     SnapshotLoaded { summary: String },
@@ -478,6 +491,6 @@ mod tests {
             "call_depth": 5
         }"#;
         let event: DynamicTraceEvent = serde_json::from_str(json).unwrap();
-        assert_eq!(event.call_depth, 5);
+        assert_eq!(event.call_depth, Some(5));
     }
 }

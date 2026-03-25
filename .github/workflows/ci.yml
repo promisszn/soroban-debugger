@@ -20,6 +20,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Docs guard (single canonical contributor guide)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f CONTRIBUTING.md
+
+          if [[ -f CONTRIBUTION.md ]]; then
+            lines="$(wc -l < CONTRIBUTION.md | tr -d ' ')"
+            if [[ "$lines" -gt 20 ]]; then
+              echo "CONTRIBUTION.md must remain a short redirect stub (<= 20 lines)."
+              exit 1
+            fi
+            grep -qi "deprecated" CONTRIBUTION.md
+            grep -q "CONTRIBUTING.md" CONTRIBUTION.md
+          fi
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -111,6 +127,8 @@ jobs:
       BENCH_WARMUP_TIME: 2
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Needed to benchmark origin/main in a detached worktree
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -127,6 +145,13 @@ jobs:
           restore-keys: |
             bench-baseline-${{ runner.os }}-
 
+      - name: Verify benchmark script isolation behavior
+        shell: bash
+        run: bash scripts/test_benchmark_regressions.sh
+
+      - name: Run benchmark regression check
+        shell: bash
+        run: bash scripts/check_benchmark_regressions.sh
       - name: Run benchmarks (current)
         run: cargo bench --benches -- --noplot --sample-size $BENCH_SAMPLE_SIZE --measurement-time $BENCH_MEASUREMENT_TIME --warm-up-time $BENCH_WARMUP_TIME
 
