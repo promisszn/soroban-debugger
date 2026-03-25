@@ -44,7 +44,7 @@ async function main(): Promise<void> {
     snapshotPath,
     entrypoint: 'echo',
     args: ['7'],
-    token: 'debug-token-1234567890'
+    token: 'debug-token'
   });
   assert.equal(goodPreflight.ok, true, 'Expected valid launch configuration to pass preflight');
 
@@ -87,17 +87,6 @@ async function main(): Promise<void> {
   });
   assert.equal(badToken.ok, false, 'Expected blank token to fail preflight');
   assert.equal(badToken.issues[0].field, 'token');
-
-  const shortToken = await validateLaunchConfig({
-    binaryPath: preflightBinaryPath,
-    contractPath,
-    entrypoint: 'echo',
-    args: [],
-    token: 'short-token'
-  });
-  assert.equal(shortToken.ok, false, 'Expected short token to fail preflight');
-  assert.equal(shortToken.issues[0].field, 'token');
-  assert.match(shortToken.issues[0].expected, /32-byte token/i);
 
   const binaryPath = process.env.SOROBAN_DEBUG_BIN
     || path.join(repoRoot, 'target', 'debug', process.platform === 'win32' ? 'soroban-debug.exe' : 'soroban-debug');

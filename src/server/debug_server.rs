@@ -838,60 +838,6 @@ fn current_storage(engine: &DebuggerEngine) -> Result<std::collections::HashMap<
         .collect())
 }
 
-fn summarize_request(request: &DebugRequest) -> String {
-    match request {
-        DebugRequest::Authenticate { token } => {
-            format!("Authenticate {{ token: {} }}", redact_secret(token))
-        }
-        DebugRequest::LoadContract { contract_path } => {
-            format!("LoadContract {{ contract_path: {:?} }}", contract_path)
-        }
-        DebugRequest::Execute { function, args } => {
-            format!(
-                "Execute {{ function: {:?}, args_present: {} }}",
-                function,
-                args.is_some()
-            )
-        }
-        DebugRequest::StepIn => "StepIn".to_string(),
-        DebugRequest::Next => "Next".to_string(),
-        DebugRequest::StepOut => "StepOut".to_string(),
-        DebugRequest::Continue => "Continue".to_string(),
-        DebugRequest::Inspect => "Inspect".to_string(),
-        DebugRequest::GetStorage => "GetStorage".to_string(),
-        DebugRequest::GetStack => "GetStack".to_string(),
-        DebugRequest::GetBudget => "GetBudget".to_string(),
-        DebugRequest::SetBreakpoint { id, function, .. } => {
-            format!("SetBreakpoint {{ id: {:?}, function: {:?} }}", id, function)
-        }
-        DebugRequest::ClearBreakpoint { id } => {
-            format!("ClearBreakpoint {{ id: {:?} }}", id)
-        }
-        DebugRequest::ListBreakpoints => "ListBreakpoints".to_string(),
-        DebugRequest::GetCapabilities => "GetCapabilities".to_string(),
-        DebugRequest::SetStorage { .. } => "SetStorage { storage_json: <redacted> }".to_string(),
-        DebugRequest::LoadSnapshot { snapshot_path } => {
-            format!("LoadSnapshot {{ snapshot_path: {:?} }}", snapshot_path)
-        }
-        DebugRequest::Evaluate { expression, frame_id } => {
-            format!(
-                "Evaluate {{ expression: {:?}, frame_id: {:?} }}",
-                expression, frame_id
-            )
-        }
-        DebugRequest::Ping => "Ping".to_string(),
-        DebugRequest::Disconnect => "Disconnect".to_string(),
-    }
-}
-
-fn redact_secret(secret: &str) -> String {
-    if secret.is_empty() {
-        "<redacted:empty>".to_string()
-    } else {
-        format!("<redacted:{} chars>", secret.chars().count())
-    }
-}
-
 fn load_tls_config(cert_path: &Path, key_path: &Path) -> Result<ServerConfig> {
     let cert_file = fs::File::open(cert_path)
         .map_err(|e| miette::miette!("Failed to open cert file {:?}: {}", cert_path, e))?;
