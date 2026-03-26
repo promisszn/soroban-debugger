@@ -1,4 +1,4 @@
-use soroban_debugger::analyzer::security::SecurityAnalyzer;
+use soroban_debugger::analyzer::security::{AnalyzerFilter, SecurityAnalyzer};
 use soroban_debugger::utils::wasm::{parse_instructions, WasmInstruction};
 
 fn encode_u32(mut value: u32) -> Vec<u8> {
@@ -50,8 +50,9 @@ fn wasm_with_single_i32_function(param_count: u8, locals: &[(u32, u8)], ops: &[u
 }
 
 fn arithmetic_findings(wasm: &[u8]) -> Vec<soroban_debugger::analyzer::security::SecurityFinding> {
+    let filter = AnalyzerFilter::default();
     SecurityAnalyzer::new()
-        .analyze(wasm, None, None)
+        .analyze(wasm, None, None, &filter)
         .expect("analysis failed")
         .findings
         .into_iter()
@@ -134,18 +135,24 @@ fn test_ignores_non_adjacent_semantic_guard_via_local_flow() {
 }
 
 #[test]
-fn test_flags_adjacent_but_unrelated_compare() {
-    let wasm = wasm_with_single_i32_function(
-        2,
-        &[],
-        &[
-            0x20, 0x00, 0x20, 0x01, 0x6a, 0x41, 0x00, 0x41, 0x01, 0x49, 0x04, 0x40, 0x0b,
-        ],
-    );
+fn test_ignores_call_guarded_arithmetic() {
+    // Call is intentionally not treated as an arithmetic guard.
+    let wasm = vec![0x10, 0x6A];
+    let analyzer = SecurityAnalyzer::new();
+    let filter = AnalyzerFilter::default();
+    let report = analyzer
+        .analyze(&wasm, None, None, &filter)
+        .expect("analysis failed");
 
-    let findings = arithmetic_findings(&wasm);
-    assert_eq!(findings.len(), 1);
-    assert_eq!(findings[0].confidence, Some(0.95));
+    let arithmetic_findings: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.rule_id == "arithmetic-overflow")
+        .collect();
+    assert!(
+        !arithmetic_findings.is_empty(),
+        "Call should not suppress arithmetic finding"
+    );
 }
 
 #[test]

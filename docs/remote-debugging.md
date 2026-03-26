@@ -50,9 +50,26 @@ soroban-debug remote \
   --args '["user1", 100]'
 ```
 
-## Security Model
+### Timeouts and Retries (network instability)
 
-### Important assumptions
+Remote sessions often run across CI, containers, or flaky links. The remote client supports deterministic timeouts and controlled retries for **idempotent** operations.
+
+- Retries apply to: `Ping`, `Inspect`, `GetStorage` (and other read-only state queries).
+- No-retry semantics apply to: execution/stepping commands (e.g. `Execute`, `Continue`, `StepIn/Next/StepOut`) to avoid unintended side effects.
+
+Example (tighter ping timeout, more retries):
+
+```bash
+soroban-debug remote \
+  --remote host:9229 \
+  --token "$TOKEN" \
+  --ping-timeout-ms 1000 \
+  --retry-attempts 5 \
+  --retry-base-delay-ms 100 \
+  --retry-max-delay-ms 1500
+```
+
+## Features
 
 - A token protects **authentication**, not **confidentiality**.
 - If you run remote debugging without TLS, the traffic should be treated as plaintext.
@@ -167,6 +184,65 @@ Example response:
     "message": "Authentication failed"
   }
 }
+```
+
+## Graceful Shutdown
+
+The debug server handles system signals to enable clean shutdown:
+
+### Supported signals
+
+- **SIGINT** (Ctrl+C): Graceful termination
+- **SIGTERM** (Unix/Linux): Graceful termination
+
+### Shutdown behavior
+
+When the server receives a shutdown signal:
+
+1. The listener socket is closed immediately
+2. New connection attempts are rejected
+3. Existing client connections continue until they send a disconnect request or connection loss
+4. All resources are released
+5. The process exits cleanly
+
+### Clean termination example
+
+```bash
+soroban-debug server --port 9229 &
+SERVER_PID=$!
+
+# Run your debug session
+soroban-debug remote --remote localhost:9229 --contract ./contract.wasm ...
+
+# Clean shutdown
+kill $SERVER_PID
+
+# Server logs will show:
+# INFO: Shutdown message
+```
+
+### CI and automation cleanup
+
+When running the server in CI, ensure proper cleanup:
+
+```yaml
+steps:
+  - name: Start Debug Server
+    run: |
+      soroban-debug server --port 9229 --token "${{ secrets.DEBUG_TOKEN }}" &
+      echo $! > server.pid
+      sleep 1
+
+  - name: Run Tests
+    run: |
+      # Your test commands here
+      soroban-debug remote ...
+
+  - name: Cleanup
+    if: always()
+    run: |
+      [ -f server.pid ] && kill $(cat server.pid) || true
+      wait
 ```
 
 ## Supported Operations
