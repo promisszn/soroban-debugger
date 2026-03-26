@@ -1,6 +1,6 @@
 use crate::runtime::executor::ContractExecutor;
 use crate::server::protocol::{DynamicTraceEvent, DynamicTraceEventKind};
-use crate::utils::wasm::{parse_instructions, WasmInstruction};
+use crate::utils::wasm::analyze_arithmetic_ops;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -268,22 +268,34 @@ impl SecurityRule for ArithmeticCheckRule {
         "Detects potential for unchecked arithmetic overflow."
     }
 
-    fn analyze_static(&self, _wasm_bytes: &[u8]) -> Result<Vec<SecurityFinding>> {
-        // TODO: Implement is_arithmetic and is_guarded
-        Ok(Vec::new())
-    }
-}
-
-impl ArithmeticCheckRule {
-    fn is_arithmetic(instr: &WasmInstruction) -> bool {
-        matches!(
-            instr,
-            WasmInstruction::I32Add
-                | WasmInstruction::I32Sub
-                | WasmInstruction::I32Mul
-                | WasmInstruction::I64Add
-                | WasmInstruction::I64Sub
-                | WasmInstruction::I64Mul
+    fn analyze_static(&self, wasm_bytes: &[u8]) -> Result<Vec<SecurityFinding>> {
+        Ok(
+            analyze_arithmetic_ops(wasm_bytes)?
+                .into_iter()
+                .map(|analysis| {
+                    let confidence_label = analysis.confidence.label();
+                    let rationale = analysis.rationale;
+                    SecurityFinding {
+                        rule_id: self.name().to_string(),
+                        severity: Severity::Medium,
+                        location: format!(
+                            "Function {} instruction {} (offset {})",
+                            analysis.function_index,
+                            analysis.instruction_index,
+                            analysis.offset
+                        ),
+                        description: format!(
+                            "Potential unchecked arithmetic operation detected: {:?}. Confidence: {}. {}",
+                            analysis.instruction,
+                            confidence_label,
+                            rationale
+                        ),
+                        remediation: "Ensure arithmetic operations are guarded with proper bounds checks or overflow handling.".to_string(),
+                        confidence: Some(analysis.confidence.score()),
+                        rationale: Some(rationale),
+                    }
+                })
+                .collect(),
         )
     }
 }

@@ -136,7 +136,8 @@ impl RemoteClient {
                     info!("Authentication successful");
                     Ok(())
                 } else {
-                    Err(DebuggerError::AuthenticationFailed(message).into())
+                    let sanitized = sanitize_auth_message(&message, token);
+                    Err(DebuggerError::AuthenticationFailed(sanitized).into())
                 }
             }
             _ => Err(DebuggerError::ExecutionError(
@@ -515,7 +516,7 @@ impl RemoteClient {
                 Ok(resp) => return Ok(resp),
                 Err(failure) => {
                     if !idempotent || attempt >= max_attempts || !failure.is_transient() {
-                        return Err(failure.into_error(operation, timeout).into());
+                        return Err(failure.into_error(operation).into());
                     }
 
                     // On transient failures, prefer reconnecting to clear any partial state/buffers.
@@ -658,7 +659,7 @@ impl SendFailure {
         }
     }
 
-    fn into_error(self, operation: &str, timeout: Duration) -> DebuggerError {
+    fn into_error(self, operation: &str) -> DebuggerError {
         match self {
             SendFailure::NotAuthenticated => DebuggerError::AuthenticationFailed(
                 "Not authenticated. Call authenticate() first.".to_string(),
@@ -667,7 +668,7 @@ impl SendFailure {
                 "{} failed: connection closed by peer",
                 operation
             )),
-            SendFailure::Timeout { stage, .. } => DebuggerError::RequestTimeout {
+            SendFailure::Timeout { stage, timeout } => DebuggerError::RequestTimeout {
                 operation: format!("{} ({})", operation, stage),
                 timeout_ms: timeout.as_millis() as u64,
             },
