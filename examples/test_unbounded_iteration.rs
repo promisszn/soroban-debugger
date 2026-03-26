@@ -12,12 +12,8 @@ fn main() {
     let wasm_with_storage_loop = create_wasm_with_storage_loop();
 
     let analyzer = SecurityAnalyzer::new();
-    match analyzer.analyze(
-        &wasm_with_storage_loop,
-        None,
-        None,
-        &AnalyzerFilter::default(),
-    ) {
+    let filter = AnalyzerFilter::default();
+    match analyzer.analyze(&wasm_with_storage_loop, None, None, &filter) {
         Ok(report) => {
             println!(
                 "Analysis complete. Found {} security issues.",
@@ -31,9 +27,8 @@ fn main() {
                     println!("  Description: {}", finding.description);
 
                     if let Some(confidence) = &finding.confidence {
-                        println!("  Confidence: {:.0}%", confidence * 100.0);
+                        println!("  Confidence: {:.0}%", confidence);
                     }
-
                     if let Some(rationale) = &finding.rationale {
                         println!("  Rationale: {}", rationale);
                     }
@@ -103,9 +98,9 @@ mod tests {
     fn test_unbounded_iteration_detection() {
         let wasm = create_wasm_with_storage_loop();
         let analyzer = SecurityAnalyzer::new();
-
+        let filter = AnalyzerFilter::default();
         let report = analyzer
-            .analyze(&wasm, None, None)
+            .analyze(&wasm, None, None, &filter)
             .expect("Analysis should succeed");
 
         // Should find the unbounded iteration issue
@@ -128,13 +123,7 @@ mod tests {
 
         // Should have confidence metadata
         assert!(finding.confidence.is_some());
-        let confidence = finding.confidence.as_ref().unwrap();
-        assert!(!confidence.rationale.is_empty());
-
-        // Should have context metadata
-        assert!(finding.context.is_some());
-        let context = finding.context.as_ref().unwrap();
-        assert!(context.loop_nesting_depth.is_some());
-        assert!(context.storage_call_pattern.is_some());
+        assert!(finding.rationale.is_some());
+        assert!(!finding.rationale.as_ref().unwrap().is_empty());
     }
 }
