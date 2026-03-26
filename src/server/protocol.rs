@@ -99,6 +99,9 @@ pub struct DynamicTraceEvent {
     pub call_depth: Option<u64>,
     pub storage_key: Option<String>,
     pub storage_value: Option<String>,
+    /// Actor address associated with this event (e.g., the address being authorized).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
 }
 
 /// Source location information (file, line, column)

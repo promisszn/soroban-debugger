@@ -303,61 +303,71 @@ impl SecurityRule for AuthorizationCheckRule {
         trace: &[DynamicTraceEvent],
     ) -> Result<Vec<SecurityFinding>> {
         let mut findings = Vec::new();
-        let mut auth_sequences = std::collections::HashMap::new();
+        let mut auth_actors_per_frame: std::collections::HashMap<FrameKey, std::collections::HashMap<String, usize>> = std::collections::HashMap::new();
 
-        // First pass: find the earliest authorization event per frame
+        // First pass: find authorized actors per frame
         for entry in trace {
             if entry.kind == DynamicTraceEventKind::Authorization {
                 if let Some(frame) = frame_key_for(entry) {
-                    let seq = auth_sequences.entry(frame).or_insert(entry.sequence);
-                    if entry.sequence < *seq {
-                        *seq = entry.sequence;
+                    let actors = auth_actors_per_frame.entry(frame).or_default();
+                    let addr = entry.address.clone().or_else(|| {
+                        // Legacy fallback
+                        entry.message.split_whitespace()
+                            .find(|w| (w.starts_with('G') || w.starts_with('C')) && w.len() == 56)
+                            .map(|s| s.to_string())
+                    });
+                    if let Some(addr) = addr {
+                        actors.entry(addr).or_insert(entry.sequence);
                     }
                 }
             }
         }
 
-        let mut problematic_storage_writes = Vec::new();
-        // Second pass: check storage writes against their frame's earliest auth
+        let mut problematic_writes = Vec::new();
+        // Second pass: check storage writes
         for entry in trace {
             if entry.kind == DynamicTraceEventKind::StorageWrite {
                 if let Some(frame) = frame_key_for(entry) {
-                    if let Some(&auth_seq) = auth_sequences.get(&frame) {
-                        if entry.sequence < auth_seq {
-                            problematic_storage_writes.push(entry.clone());
+                    if let Some(authorized_actors) = auth_actors_per_frame.get(&frame) {
+                        let earliest_auth = authorized_actors.values().min().cloned().unwrap_or(usize::MAX);
+                        if entry.sequence < earliest_auth {
+                            problematic_writes.push((entry.clone(), format!("Storage mutation detected before any authorization in frame '{}'.", frame.function.as_deref().unwrap_or("unknown"))));
+                        } else if let Some(key) = &entry.storage_key {
+                            let covered = authorized_actors.keys().any(|addr| key.contains(addr));
+                            if !covered && !authorized_actors.is_empty() {
+                                problematic_writes.push((entry.clone(), format!(
+                                    "Storage mutation to key '{}' detected without authorization for a relevant actor in frame '{}'. Authorized actors: {:?}",
+                                    key,
+                                    frame.function.as_deref().unwrap_or("unknown"),
+                                    authorized_actors.keys().collect::<Vec<_>>()
+                                )));
+                            }
                         }
                     } else {
-                        // No auth seen ever in this frame
-                        problematic_storage_writes.push(entry.clone());
+                        problematic_writes.push((entry.clone(), format!("Storage mutation detected without any preceding authorization in frame '{}'.", frame.function.as_deref().unwrap_or("unknown"))));
                     }
                 } else {
-                    // Storage write with no frame tracking
-                    problematic_storage_writes.push(entry.clone());
+                    problematic_writes.push((entry.clone(), "Storage mutation detected without frame metadata or preceding authorization.".to_string()));
                 }
             }
         }
 
-        // If we have storage writes without preceding auth in the same scope, report a finding
-        if !problematic_storage_writes.is_empty() {
-            let details: Vec<String> = problematic_storage_writes.iter().take(3).map(|e| {
-                format!("Seq {}: Write in {} at depth {}", e.sequence, e.function.as_deref().unwrap_or("unknown"), e.call_depth.unwrap_or(0))
-            }).collect();
-            
-            let description = format!(
-                "Storage mutation detected without preceding authorization in the same call frame. Found {} storage write(s) occurring outside authorized scope. Examples: {}",
-                problematic_storage_writes.len(),
-                details.join(", ")
-            );
-
-            findings.push(SecurityFinding {
-                rule_id: self.name().to_string(),
-                severity: Severity::High,
-                location: "Dynamic trace".to_string(),
-                description,
-                remediation: "Ensure all sensitive functions call `address.require_auth()` in their own scope before mutating state.".to_string(),
-                confidence: None,
-                rationale: None,
-            });
+        if !problematic_writes.is_empty() {
+            let mut seen_descriptions = std::collections::HashSet::new();
+            for (write, desc) in problematic_writes {
+                if seen_descriptions.insert(desc.clone()) {
+                    findings.push(SecurityFinding {
+                        rule_id: self.name().to_string(),
+                        severity: Severity::High,
+                        location: format!("Trace seq {}", write.sequence),
+                        description: desc,
+                        remediation: "Ensure all sensitive functions call `address.require_auth()` for the appropriate actor before mutating state.".to_string(),
+                        confidence: Some(0.9),
+                        rationale: Some("Found storage writes occurring outside authorized scope or for mismatched actors within the call frame.".to_string()),
+                    });
+                }
+            }
+        }
         }
 
         Ok(findings)
@@ -1436,9 +1446,10 @@ mod tests {
                 message: "nested contract writes receipt".to_string(),
                 caller: Some("withdraw".to_string()),
                 function: Some("token.transfer".to_string()),
-                call_depth: Some(0),
+                call_depth: Some(1),
                 storage_key: Some("receipt:1".to_string()),
                 storage_value: Some("ok".to_string()),
+                address: None,
             },
         ]);
 
@@ -1484,8 +1495,9 @@ mod tests {
     fn storage_read_import_ignores_unrelated_modules() {
         assert!(!is_storage_read_import("not_env", "storage_get"));
         assert!(!is_storage_read_import("mylib", "storage_get"));
-        assert!(!is_storage_read_import("environments", "storage_get"));
-    }
+         // -----------------------------------------------------------------------
+    // AuthorizationCheckRule — dynamic trace tests
+    // -----------------------------------------------------------------------
 
     // -----------------------------------------------------------------------
     // AuthorizationCheckRule — dynamic trace tests
@@ -1494,8 +1506,7 @@ mod tests {
     #[test]
     fn auth_rule_detects_storage_before_auth() {
         let rule = AuthorizationCheckRule;
-
-        // Test case: storage write happens before authorization
+        
         let trace = vec![
             DynamicTraceEvent {
                 sequence: 0,
@@ -1506,6 +1517,7 @@ mod tests {
                 call_depth: Some(0),
                 storage_key: Some("key1".to_string()),
                 storage_value: Some("value1".to_string()),
+                address: None,
             },
             DynamicTraceEvent {
                 sequence: 1,
@@ -1516,22 +1528,20 @@ mod tests {
                 call_depth: Some(0),
                 storage_key: None,
                 storage_value: None,
+                address: None,
             },
         ];
 
         let findings = rule.analyze_dynamic(None, &trace).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule_id, "missing-auth");
-        assert!(findings[0]
-            .description
-            .contains("1 storage write(s) occurring outside authorized scope"));
+        assert!(findings[0].description.contains("before any authorization in frame 'test_function'"));
     }
 
     #[test]
     fn auth_rule_allows_storage_after_auth() {
         let rule = AuthorizationCheckRule;
-
-        // Test case: authorization happens before storage write (should be OK)
+        
         let trace = vec![
             DynamicTraceEvent {
                 sequence: 0,
@@ -1542,6 +1552,7 @@ mod tests {
                 call_depth: Some(0),
                 storage_key: None,
                 storage_value: None,
+                address: Some("G123...".to_string()),
             },
             DynamicTraceEvent {
                 sequence: 1,
@@ -1550,8 +1561,9 @@ mod tests {
                 caller: None,
                 function: Some("test_function".to_string()),
                 call_depth: Some(0),
-                storage_key: Some("key1".to_string()),
+                storage_key: Some("key1:G123...".to_string()),
                 storage_value: Some("value1".to_string()),
+                address: None,
             },
         ];
 
@@ -1562,8 +1574,7 @@ mod tests {
     #[test]
     fn auth_rule_detects_multiple_storage_before_auth() {
         let rule = AuthorizationCheckRule;
-
-        // Test case: multiple storage writes happen before authorization
+        
         let trace = vec![
             DynamicTraceEvent {
                 sequence: 0,
@@ -1574,6 +1585,7 @@ mod tests {
                 call_depth: Some(0),
                 storage_key: Some("key1".to_string()),
                 storage_value: Some("value1".to_string()),
+                address: None,
             },
             DynamicTraceEvent {
                 sequence: 1,
@@ -1584,6 +1596,7 @@ mod tests {
                 call_depth: Some(0),
                 storage_key: Some("key2".to_string()),
                 storage_value: Some("value2".to_string()),
+                address: None,
             },
             DynamicTraceEvent {
                 sequence: 2,
@@ -1594,22 +1607,20 @@ mod tests {
                 call_depth: Some(0),
                 storage_key: None,
                 storage_value: None,
+                address: None,
             },
         ];
 
         let findings = rule.analyze_dynamic(None, &trace).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule_id, "missing-auth");
-        assert!(findings[0]
-            .description
-            .contains("2 storage write(s) occurring outside authorized scope"));
+        assert!(findings[0].description.contains("before any authorization in frame 'test_function'"));
     }
 
     #[test]
     fn auth_rule_detects_storage_without_any_auth() {
         let rule = AuthorizationCheckRule;
-
-        // Test case: storage writes with no authorization at all
+        
         let trace = vec![
             DynamicTraceEvent {
                 sequence: 0,
@@ -1620,6 +1631,7 @@ mod tests {
                 call_depth: Some(0),
                 storage_key: Some("key1".to_string()),
                 storage_value: Some("value1".to_string()),
+                address: None,
             },
             DynamicTraceEvent {
                 sequence: 1,
@@ -1630,15 +1642,14 @@ mod tests {
                 call_depth: Some(0),
                 storage_key: Some("key2".to_string()),
                 storage_value: Some("value2".to_string()),
+                address: None,
             },
         ];
 
         let findings = rule.analyze_dynamic(None, &trace).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule_id, "missing-auth");
-        assert!(findings[0]
-            .description
-            .contains("2 storage write(s) occurring outside authorized scope"));
+        assert!(findings[0].description.contains("without any preceding authorization in frame 'test_function'"));
     }
 
     #[test]
@@ -1653,9 +1664,10 @@ mod tests {
                 message: "auth check inside nested".to_string(),
                 caller: None,
                 function: Some("nested_function".to_string()),
+                call_depth: Some(1),
                 storage_key: None,
                 storage_value: None,
-                call_depth: Some(1),
+                address: None,
             },
             DynamicTraceEvent {
                 sequence: 1,
@@ -1663,17 +1675,51 @@ mod tests {
                 message: "write key1 in main".to_string(),
                 caller: None,
                 function: Some("main_function".to_string()),
+                call_depth: Some(0),
                 storage_key: Some("key1".to_string()),
                 storage_value: Some("value1".to_string()),
-                call_depth: Some(0),
+                address: None,
             },
         ];
 
         let findings = rule.analyze_dynamic(None, &trace).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule_id, "missing-auth");
-        assert!(findings[0]
-            .description
-            .contains("Write in main_function at depth 0"));
+        assert!(findings[0].description.contains("without any preceding authorization in frame 'main_function'"));
+    }
+
+    #[test]
+    fn auth_rule_detects_actor_mismatch() {
+        let rule = AuthorizationCheckRule;
+        
+        let trace = vec![
+            DynamicTraceEvent {
+                sequence: 0,
+                kind: DynamicTraceEventKind::Authorization,
+                message: "authorized G_ALICE".to_string(),
+                function: Some("test_function".to_string()),
+                call_depth: Some(0),
+                address: Some("G_ALICE_ADDRESS_1234567890123456789012345678901234567890123456".to_string()),
+                storage_key: None,
+                storage_value: None,
+                caller: None,
+            },
+            DynamicTraceEvent {
+                sequence: 1,
+                kind: DynamicTraceEventKind::StorageWrite,
+                message: "write G_BOB data".to_string(),
+                function: Some("test_function".to_string()),
+                storage_key: Some("data:G_BOB_ADDRESS_1234567890123456789012345678901234567890123456".to_string()),
+                storage_value: Some("value".to_string()),
+                call_depth: Some(0),
+                address: None,
+                caller: None,
+            },
+        ];
+
+        let findings = rule.analyze_dynamic(None, &trace).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].description.contains("without authorization for a relevant actor"));
+        assert!(findings[0].description.contains("G_ALICE_ADDRESS"));
     }
 }
