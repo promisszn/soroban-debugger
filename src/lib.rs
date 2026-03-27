@@ -34,7 +34,6 @@ pub use runtime::executor::ContractExecutor;
 pub type Result<T> = miette::Result<T>;
 
 /// Error types for the debugger
-#[allow(unused_assignments)] // False positive from derive macro expansion for named error fields.
 #[derive(Debug, thiserror::Error, Diagnostic)]
 pub enum DebuggerError {
     #[error("Failed to load WASM file: {0}")]
@@ -84,6 +83,7 @@ pub enum DebuggerError {
         code(debugger::checksum_mismatch),
         help("Action: If you recompiled the contract, supply its new hash or run without the hash verification flag.\nContext: The provided file hash does not match expected remote or snapshot hash.")
     )]
+    #[allow(unused_assignments)] // False positive from derive macro expansion for named fields.
     ChecksumMismatch { expected: String, actual: String },
 
     #[error("File operation failed: {0}")]
@@ -105,6 +105,7 @@ pub enum DebuggerError {
         code(debugger::request_timeout),
         help("Action: Increase the timeout/retry settings if your host environment is slow or congested.\nContext: Network instability or an overloaded host aborted the request.")
     )]
+    #[allow(unused_assignments)] // False positive from derive macro expansion for named fields.
     RequestTimeout { operation: String, timeout_ms: u64 },
 
     #[error("Authentication failed: {0}")]
