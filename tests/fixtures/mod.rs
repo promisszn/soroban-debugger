@@ -1,4 +1,5 @@
 //! Test fixture utilities for loading pre-compiled WASM contracts.
+#![allow(dead_code)]
 
 use serde::Deserialize;
 use std::{
