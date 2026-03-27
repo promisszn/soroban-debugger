@@ -90,6 +90,14 @@ fn render_symbolic_report(report: &crate::analyzer::symbolic::SymbolicReport) ->
         format!("Paths explored: {}", report.paths_explored),
         format!("Panics found: {}", report.panics_found),
         format!(
+            "Replay token: {}",
+            report
+                .metadata
+                .seed
+                .map(|seed| seed.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!(
             "Budget: path_cap={}, input_combination_cap={}, timeout={}s",
             report.metadata.config.max_paths,
             report.metadata.config.max_input_combinations,
@@ -145,7 +153,7 @@ fn symbolic_profile_config(profile: SymbolicProfile) -> SymbolicConfig {
     }
 }
 
-fn symbolic_config_from_args(args: &SymbolicArgs) -> SymbolicConfig {
+fn symbolic_config_from_args(args: &SymbolicArgs) -> Result<SymbolicConfig> {
     let mut config = symbolic_profile_config(args.profile);
     if let Some(path_cap) = args.path_cap {
         config.max_paths = path_cap;
@@ -153,10 +161,36 @@ fn symbolic_config_from_args(args: &SymbolicArgs) -> SymbolicConfig {
     if let Some(input_cap) = args.input_combination_cap {
         config.max_input_combinations = input_cap;
     }
+    if let Some(max_breadth) = args.max_breadth {
+        config.max_breadth = max_breadth;
+    }
     if let Some(timeout) = args.timeout {
         config.timeout_secs = timeout;
     }
-    config
+    config.seed = args.seed.or(args.replay);
+    if let Some(storage_seed_path) = &args.storage_seed {
+        config.storage_seed = Some(fs::read_to_string(storage_seed_path).map_err(|e| {
+            DebuggerError::FileError(format!(
+                "Failed to read storage seed file {:?}: {}",
+                storage_seed_path, e
+            ))
+        })?);
+    }
+
+    Ok(config)
+}
+
+fn parse_min_severity(value: &str) -> Result<crate::analyzer::security::Severity> {
+    match value.to_ascii_lowercase().as_str() {
+        "low" => Ok(crate::analyzer::security::Severity::Low),
+        "medium" | "med" => Ok(crate::analyzer::security::Severity::Medium),
+        "high" => Ok(crate::analyzer::security::Severity::High),
+        other => Err(DebuggerError::InvalidArguments(format!(
+            "Unsupported --min-severity '{}'. Use low, medium, or high.",
+            other
+        ))
+        .into()),
+    }
 }
 
 fn render_security_report(output: &AnalyzeCommandOutput) -> String {
@@ -2025,7 +2059,7 @@ pub fn symbolic(args: SymbolicArgs, _verbosity: Verbosity) -> Result<()> {
         .with_context(|| format!("Failed to read WASM file: {:?}", args.contract))?;
 
     let analyzer = SymbolicAnalyzer::new();
-    let config = symbolic_config_from_args(&args);
+    let config = symbolic_config_from_args(&args)?;
     let report = analyzer.analyze_with_config(&wasm_file.bytes, &args.function, &config)?;
 
     println!("{}", render_symbolic_report(&report));
@@ -2093,11 +2127,16 @@ pub fn analyze(args: AnalyzeArgs, _verbosity: Verbosity) -> Result<()> {
     }
 
     let analyzer = SecurityAnalyzer::new();
+    let filter = crate::analyzer::security::AnalyzerFilter {
+        enable_rules: args.enable_rule.clone(),
+        disable_rules: args.disable_rule.clone(),
+        min_severity: parse_min_severity(&args.min_severity)?,
+    };
     let report = analyzer.analyze(
         &wasm_file.bytes,
         executor.as_ref(),
         trace_entries.as_deref(),
-        &crate::analyzer::security::AnalyzerFilter::default(),
+        &filter,
     )?;
     let output = AnalyzeCommandOutput {
         findings: report.findings,

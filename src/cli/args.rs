@@ -949,6 +949,11 @@ pub struct SymbolicArgs {
     #[arg(long, value_name = "N")]
     pub path_cap: Option<usize>,
 
+    /// Legacy alias for controlling generated-value branching width.
+    /// Preserved for backward-compatible CLI parsing.
+    #[arg(long, value_name = "N")]
+    pub max_breadth: Option<usize>,
+
     /// Maximum time for symbolic analysis, in seconds.
     /// When omitted, the budget is controlled by --profile.
     /// The command exits with a non-zero status code if this limit is exceeded.
@@ -1066,6 +1071,18 @@ pub struct AnalyzeArgs {
     /// Output format (text, json)
     #[arg(long, default_value = "text")]
     pub format: String,
+
+    /// Enable only the specified rule id(s). Repeatable.
+    #[arg(long, value_name = "RULE_ID")]
+    pub enable_rule: Vec<String>,
+
+    /// Disable the specified rule id(s). Repeatable.
+    #[arg(long, value_name = "RULE_ID")]
+    pub disable_rule: Vec<String>,
+
+    /// Minimum severity to include: low, medium, or high.
+    #[arg(long, default_value = "low", value_name = "SEVERITY")]
+    pub min_severity: String,
 }
 
 #[derive(Parser)]
