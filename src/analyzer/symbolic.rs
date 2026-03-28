@@ -293,13 +293,17 @@ impl SymbolicAnalyzer {
         }
 
         let mock_coverage = if report.metadata.generated_input_combinations > 0 {
-            (report.paths_explored as f32 / report.metadata.generated_input_combinations as f32).min(1.0)
+            (report.paths_explored as f32 / report.metadata.generated_input_combinations as f32)
+                .min(1.0)
         } else {
             1.0
         };
         report.metadata.coverage_fraction = mock_coverage;
         if mock_coverage < 1.0 {
-            report.metadata.uncovered_regions.push("Complex input boundaries and conditional branches".to_string());
+            report
+                .metadata
+                .uncovered_regions
+                .push("Complex input boundaries and conditional branches".to_string());
         }
 
         Ok(report)
