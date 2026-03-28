@@ -12,6 +12,7 @@ pub struct PathResult {
     pub inputs: String, // json array of args
     pub return_value: Option<String>,
     pub panic: Option<String>,
+    pub path_decisions: Vec<crate::server::protocol::DynamicTraceEvent>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -144,6 +145,7 @@ impl SymbolicAnalyzer {
         seen_inputs: &mut HashSet<String>,
         inputs: &str,
         outcome: std::result::Result<String, String>,
+        path_decisions: Vec<crate::server::protocol::DynamicTraceEvent>,
     ) {
         // Keep distinct paths even when outputs/errors are identical.
         // Only dedupe when the exact same input set is re-encountered.
@@ -156,6 +158,7 @@ impl SymbolicAnalyzer {
                 inputs: inputs.to_string(),
                 return_value: Some(val),
                 panic: None,
+                path_decisions,
             }),
             Err(err_str) => {
                 report.panics_found += 1;
@@ -163,6 +166,7 @@ impl SymbolicAnalyzer {
                     inputs: inputs.to_string(),
                     return_value: None,
                     panic: Some(err_str),
+                    path_decisions,
                 });
             }
         }
@@ -228,43 +232,44 @@ impl SymbolicAnalyzer {
                 break;
             }
 
-            let executor_res = std::panic::catch_unwind(|| {
+            let mut trace = Vec::new();
+            let executor_res = {
                 if let Ok(mut executor) = ContractExecutor::new(wasm.to_vec()) {
                     executor.set_timeout(config.timeout_secs);
                     // Apply storage seed if provided
                     if let Some(ref storage) = config.storage_seed {
                         if let Err(e) = executor.set_initial_storage(storage.clone()) {
-                            return Err(crate::DebuggerError::StorageError(format!(
+                            Err(crate::DebuggerError::StorageError(format!(
                                 "Failed to set initial storage: {}",
                                 e
                             ))
-                            .into());
+                            .into())
+                        } else {
+                            let res = executor.execute(function, Some(args_json));
+                            trace = executor.get_dynamic_trace().unwrap_or_default();
+                            res
                         }
+                    } else {
+                        let res = executor.execute(function, Some(args_json));
+                        trace = executor.get_dynamic_trace().unwrap_or_default();
+                        res
                     }
-                    executor.execute(function, Some(args_json))
                 } else {
                     Err(crate::DebuggerError::ExecutionError("Init fail".into()).into())
                 }
-            });
+            };
 
             match executor_res {
-                Ok(Ok(val)) => {
-                    Self::record_outcome(&mut report, &mut seen_inputs, args_json, Ok(val));
+                Ok(val) => {
+                    Self::record_outcome(&mut report, &mut seen_inputs, args_json, Ok(val), trace);
                 }
-                Ok(Err(err)) => {
+                Err(err) => {
                     Self::record_outcome(
                         &mut report,
                         &mut seen_inputs,
                         args_json,
                         Err(err.to_string()),
-                    );
-                }
-                Err(_) => {
-                    Self::record_outcome(
-                        &mut report,
-                        &mut seen_inputs,
-                        args_json,
-                        Err("Host Panic".to_string()),
+                        trace,
                     );
                 }
             }

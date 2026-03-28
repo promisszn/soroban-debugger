@@ -2155,7 +2155,20 @@ pub fn symbolic(args: SymbolicArgs, _verbosity: Verbosity) -> Result<()> {
     let config = symbolic_config_from_args(&args)?;
     let report = analyzer.analyze_with_config(&wasm_file.bytes, &args.function, &config)?;
 
-    println!("{}", render_symbolic_report(&report));
+    match args.format {
+        OutputFormat::Pretty => {
+            println!("{}", render_symbolic_report(&report));
+        }
+        OutputFormat::Json => {
+            let envelope = crate::output::VersionedOutput::success("symbolic", &report);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&envelope).map_err(|e| {
+                    DebuggerError::FileError(format!("Failed to serialize symbolic report: {}", e))
+                })?
+            );
+        }
+    }
 
     if let Some(output_path) = &args.output {
         let scenario_toml = analyzer.generate_scenario_toml(&report);

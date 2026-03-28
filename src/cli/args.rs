@@ -1001,6 +1001,10 @@ pub struct SymbolicArgs {
     /// affect contract behavior. The JSON should be a map of key-value pairs.
     #[arg(long, value_name = "FILE")]
     pub storage_seed: Option<PathBuf>,
+
+    /// Output format for the report (pretty/text or json)
+    #[arg(long, value_enum, default_value_t = OutputFormat::Pretty)]
+    pub format: OutputFormat,
 }
 
 #[derive(Parser)]

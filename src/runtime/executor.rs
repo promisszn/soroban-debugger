@@ -518,58 +518,22 @@ impl ContractExecutor {
 
     /// Build a structured dynamic trace for security analysis.
     pub fn get_dynamic_trace(&self) -> Result<Vec<DynamicTraceEvent>> {
-        let mut out = Vec::new();
+        let mut out = self.debug_env.dynamic_events().to_vec();
 
-        for access in self.debug_env.storage_accesses() {
-            let (kind, value) = match access.access_type {
-                crate::runtime::env::StorageAccessType::Read => {
-                    (DynamicTraceEventKind::StorageRead, None)
-                }
-                crate::runtime::env::StorageAccessType::Write => {
-                    (DynamicTraceEventKind::StorageWrite, access.value.clone())
-                }
-            };
-
-            out.push(DynamicTraceEvent {
-                sequence: access.sequence,
-                kind,
-                message: format!("storage:{}:{}", access.sequence, access.key),
-                caller: None,
-                function: None,
-                call_depth: Some(0),
-                storage_key: Some(access.key.clone()),
-                storage_value: value,
-                address: None,
-            });
-        }
-
-        for call in self.debug_env.function_calls() {
-            out.push(DynamicTraceEvent {
-                sequence: call.sequence,
-                kind: DynamicTraceEventKind::FunctionCall,
-                message: format!("{} -> {}", call.caller, call.callee),
-                caller: Some(call.caller.clone()),
-                function: Some(call.callee.clone()),
-                call_depth: Some(call.depth as u64),
-                storage_key: None,
-                storage_value: None,
-                address: None,
-            });
-        }
-
+        // Add additional diagnostic events from the host that weren't captured by hooks
         let mut next_sequence = out.iter().map(|e| e.sequence).max().map_or(0, |n| n + 1);
         for event in self.get_diagnostic_events().unwrap_or_default() {
             let message = format!("{:?}", event);
+            // Skip events already captured (this is a bit heuristic)
+            if out.iter().any(|e| e.message.contains(&message) || message.contains(&e.message)) {
+                continue;
+            }
+
             out.push(DynamicTraceEvent {
                 sequence: next_sequence,
                 kind: classify_diagnostic_event_kind(&message),
                 message,
-                caller: None,
-                function: None,
-                call_depth: Some(0),
-                storage_key: None,
-                storage_value: None,
-                address: None,
+                ..Default::default()
             });
             next_sequence += 1;
         }

@@ -88,6 +88,7 @@ pub enum DynamicTraceEventKind {
     Authorization,
     CrossContractCall,
     CrossContractReturn,
+    Branch,
 }
 
 /// Rich dynamic trace entry produced by the runtime and consumed by analyzers.
