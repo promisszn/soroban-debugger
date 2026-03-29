@@ -118,6 +118,7 @@ jobs:
       BENCH_SAMPLE_SIZE: 20
       BENCH_MEASUREMENT_TIME: 5
       BENCH_WARMUP_TIME: 2
+      BENCH_BASE_WORKTREE: /tmp/bench-base-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -148,6 +149,79 @@ jobs:
       - name: Run benchmark regression check
         shell: bash
         run: bash scripts/check_benchmark_regressions.sh
+      - name: Run benchmarks (current)
+        run: cargo bench --benches -- --noplot --sample-size $BENCH_SAMPLE_SIZE --measurement-time $BENCH_MEASUREMENT_TIME --warm-up-time $BENCH_WARMUP_TIME
+
+      - name: Add main branch worktree for baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Preparing baseline worktree at: $BENCH_BASE_WORKTREE"
+          git worktree list --porcelain || true
+          git worktree add "$BENCH_BASE_WORKTREE" main
+          git worktree list --porcelain || true
+
+      - name: Run benchmarks (baseline on main)
+        working-directory: ${{ env.BENCH_BASE_WORKTREE }}
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: cargo bench -- --save-baseline base --noplot
+
+      - name: Remove main branch worktree
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Cleaning baseline worktree at: $BENCH_BASE_WORKTREE"
+          git worktree list --porcelain || true
+
+          if git worktree remove --force "$BENCH_BASE_WORKTREE"; then
+            echo "Removed baseline worktree cleanly"
+          else
+            echo "worktree remove failed; running prune/remove fallback"
+            git worktree prune --expire now || true
+            rm -rf "$BENCH_BASE_WORKTREE" || true
+          fi
+
+          git worktree list --porcelain || true
+      - name: Record current results (JSON)
+        run: cargo run --quiet --bin bench-regression -- record --criterion target/criterion --out .bench/current.json
+
+      - name: Compare against baseline (pass/warn/fail)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -e
+          report="$(cargo run --quiet --bin bench-regression -- compare \
+            --baseline .bench/baseline.json \
+            --current .bench/current.json \
+            --warn-pct "$BENCH_WARN_PCT" \
+            --fail-pct "$BENCH_FAIL_PCT" \
+            --annotate-top 20 \
+            --max-rows 50 \
+            --require-baseline false)"
+          echo "$report"
+          echo "$report" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update baseline on main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p .bench
+          cp .bench/current.json .bench/baseline.json
+
+      - name: Save baseline cache (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: .bench/baseline.json
+          key: bench-baseline-${{ runner.os }}-${{ github.sha }}
+
+      - name: Upload baseline artifact (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-baseline-${{ runner.os }}
+          path: .bench/baseline.json
 
   check-manpages:
     name: Check man page sync

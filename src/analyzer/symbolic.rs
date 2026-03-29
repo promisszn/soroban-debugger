@@ -472,7 +472,17 @@ impl SymbolicAnalyzer {
 
         match type_name {
             "U32" | "I32" | "U64" | "I64" | "U128" | "I128" | "Val" => {
-                let base = ["0", "1", "-1", "42", "2147483647", "-2147483648", "1000000"];
+                let base = [
+                    "0",
+                    "1",
+                    "-1",
+                    "42",
+                    "2147483647",
+                    "-2147483648",
+                    "18446744073709551615",
+                    "9223372036854775807",
+                    "-9223372036854775808",
+                ];
                 base.into_iter()
                     .take(limit)
                     .map(|s| s.to_string())
@@ -495,9 +505,10 @@ impl SymbolicAnalyzer {
             }
             "Address" => {
                 let base = [
-                    "\"GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF\"",
-                    "\"CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4H\"",
-                    "\"GD5DJ3B6A2KHSXLYJZ3IGR7Q5UMVJ5J4GQTKTQYQDQXJQJ5YQZQKQZQ\"",
+                    "\"GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF\"", // ZERO
+                    "\"CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4H\"", // CONTRACT_ZERO
+                    "\"GD5DJ3B6A2KHSXLYJZ3IGR7Q5UMVJ5J4GQTKTQYQDQXJQJ5YQZQKQZQ\"", // TEST_1
+                    "\"GBLO7VQYJLRU56W77WKHLYU7C3T73J3Y5PQUZLQJ5YQZQKQZQYX\"",    // TEST_2
                 ];
                 base.into_iter()
                     .take(limit)
@@ -505,7 +516,13 @@ impl SymbolicAnalyzer {
                     .collect()
             }
             "Bytes" | "BytesN" => {
-                let base = ["\"0x\"", "\"0x00\"", "\"0xffffffff\"", "\"base64:AQID\""];
+                let base = [
+                    "\"0x\"",
+                    "\"0x00\"",
+                    "\"0xff\"",
+                    "\"0x00010203\"",
+                    "\"base64:AQID\"",
+                ];
                 base.into_iter()
                     .take(limit)
                     .map(|s| s.to_string())
@@ -526,22 +543,57 @@ impl SymbolicAnalyzer {
                     if inner_seeds.len() > 1 {
                         seeds.push(format!("[{}, {}]", inner_seeds[0], inner_seeds[1]));
                     }
+                    if inner_seeds.len() > 0 {
+                        // Add one more variant if possible
+                        seeds.push(format!("[{}, {}]", inner_seeds[0], inner_seeds[0]));
+                    }
                 }
                 seeds.into_iter().take(limit).collect()
             }
             t if t.starts_with("Map<") => {
-                // Simplified Map generation: focus on empty and single entry
-                vec!["{}".to_string()]
+                let inner_part = &t[4..t.len() - 1];
+                let parts: Vec<&str> = inner_part.split(',').map(|s| s.trim()).collect();
+                if parts.len() == 2 {
+                    let key_type = parts[0];
+                    let val_type = parts[1];
+                    let keys = self.generate_seeds_for_type(key_type, config, depth + 1);
+                    let vals = self.generate_seeds_for_type(val_type, config, depth + 1);
+
+                    let mut seeds = vec!["{}".to_string()];
+                    if !keys.is_empty() && !vals.is_empty() {
+                        seeds.push(format!("{{ {}: {} }}", keys[0], vals[0]));
+                    }
+                    seeds.into_iter().take(limit).collect()
+                } else {
+                    vec!["{}".to_string()]
+                }
             }
             t if t.starts_with("Tuple<") => {
                 let inner_part = &t[6..t.len() - 1];
                 let parts: Vec<&str> = inner_part.split(',').map(|s| s.trim()).collect();
-                let mut tuple_elements = Vec::new();
+                let mut element_seeds = Vec::new();
                 for part in parts {
-                    let s = self.generate_seeds_for_type(part, config, depth + 1);
-                    tuple_elements.push(s.first().cloned().unwrap_or("null".to_string()));
+                    element_seeds.push(self.generate_seeds_for_type(part, config, depth + 1));
                 }
-                vec![format!("[{}]", tuple_elements.join(", "))]
+
+                let mut seeds = Vec::new();
+                if !element_seeds.is_empty() {
+                    let mut first_combo = Vec::new();
+                    for s in &element_seeds {
+                        first_combo.push(s.first().cloned().unwrap_or("null".to_string()));
+                    }
+                    seeds.push(format!("[{}]", first_combo.join(", ")));
+
+                    // Generate a few variants by swapping one element at a time
+                    for i in 0..element_seeds.len() {
+                        if element_seeds[i].len() > 1 {
+                            let mut variant = first_combo.clone();
+                            variant[i] = element_seeds[i][1].clone();
+                            seeds.push(format!("[{}]", variant.join(", ")));
+                        }
+                    }
+                }
+                seeds.into_iter().take(limit).collect()
             }
             _ => vec!["0".to_string()], // Fallback for UDTs or unknown types
         }
@@ -810,8 +862,8 @@ mod tests {
         };
         let mut seen_inputs = HashSet::new();
 
-        SymbolicAnalyzer::record_outcome(&mut report, &mut seen_inputs, "[0]", Ok("1".into()));
-        SymbolicAnalyzer::record_outcome(&mut report, &mut seen_inputs, "[1]", Ok("1".into()));
+        SymbolicAnalyzer::record_outcome(&mut report, &mut seen_inputs, "[0]", Ok("1".into()), Vec::new());
+        SymbolicAnalyzer::record_outcome(&mut report, &mut seen_inputs, "[1]", Ok("1".into()), Vec::new());
 
         assert_eq!(report.paths.len(), 2);
         assert_eq!(report.panics_found, 0);
@@ -842,8 +894,8 @@ mod tests {
         };
         let mut seen_inputs = HashSet::new();
 
-        SymbolicAnalyzer::record_outcome(&mut report, &mut seen_inputs, "[0]", Ok("1".into()));
-        SymbolicAnalyzer::record_outcome(&mut report, &mut seen_inputs, "[0]", Ok("1".into()));
+        SymbolicAnalyzer::record_outcome(&mut report, &mut seen_inputs, "[0]", Ok("1".into()), Vec::new());
+        SymbolicAnalyzer::record_outcome(&mut report, &mut seen_inputs, "[0]", Ok("1".into()), Vec::new());
 
         assert_eq!(report.paths.len(), 1);
     }
@@ -989,6 +1041,7 @@ mod tests {
                 inputs: "[0]".to_string(),
                 return_value: Some("1".to_string()),
                 panic: None,
+                path_decisions: Vec::new(),
             }],
             metadata: SymbolicReportMetadata {
                 config: SymbolicConfig::fast(),
@@ -1102,5 +1155,35 @@ mod tests {
             report.metadata.config.storage_seed,
             Some(r#"{"counter": 100}"#.to_string())
         );
+    }
+
+    #[test]
+    fn test_generate_seeds_complex_types() {
+        let analyzer = SymbolicAnalyzer;
+        let config = SymbolicConfig::default();
+
+        // Test Address
+        let seeds = analyzer.generate_seeds_for_type("Address", &config, 0);
+        assert!(seeds.len() >= 4);
+        assert!(seeds.contains(&"\"GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF\"".to_string()));
+        assert!(seeds.contains(&"\"GBLO7VQYJLRU56W77WKHLYU7C3T73J3Y5PQUZLQJ5YQZQKQZQYX\"".to_string()));
+
+        // Test Map
+        let seeds = analyzer.generate_seeds_for_type("Map<Symbol, U32>", &config, 0);
+        assert!(seeds.contains(&"{}".to_string()));
+        // Should have a single-entry map seed like "{ \"\": 0 }" or similar depending on Symbol seeds
+        assert!(seeds.len() > 1);
+
+        // Test Tuple
+        let seeds = analyzer.generate_seeds_for_type("Tuple<U32, Bool>", &config, 0);
+        assert!(seeds.contains(&"[0, true]".to_string()));
+        assert!(seeds.len() > 1); // Should have at least one variant like "[1, true]" or "[0, false]"
+
+        // Test Vec
+        let seeds = analyzer.generate_seeds_for_type("Vec<U32>", &config, 0);
+        assert!(seeds.contains(&"[]".to_string()));
+        assert!(seeds.contains(&"[0]".to_string()));
+        assert!(seeds.contains(&"[0, 1]".to_string()));
+        assert!(seeds.contains(&"[0, 0]".to_string())); // My new variant
     }
 }

@@ -260,7 +260,7 @@ fn main() -> miette::Result<()> {
                         metadata: false,
                         format: soroban_debugger::cli::args::OutputFormat::Pretty,
                         source_map_diagnostics: false,
-                        source_map_limit: 0,
+                        source_map_limit: 20,
                         expected_hash: None,
                         dependency_graph: None,
                     },

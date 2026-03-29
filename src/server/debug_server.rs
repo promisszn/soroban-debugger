@@ -183,8 +183,27 @@ impl DebugServer {
                 .map_err(|_| miette::miette!("Connection closed"))
         };
 
+        let mut heartbeat_interval = None;
+        let mut idle_timeout = None;
+        let mut heartbeat_timer = None;
+
         loop {
-            let line = match rx_in.recv().await {
+            let next_message = if let Some(timeout) = idle_timeout {
+                match tokio::time::timeout(std::time::Duration::from_millis(timeout as u64), rx_in.recv())
+                    .await
+                {
+                    Ok(res) => res,
+                    Err(_) => {
+                        warn!("Idle timeout reached for connection");
+                        let _ = send_msg(DebugMessage::response(0, DebugResponse::Disconnected));
+                        return Ok(());
+                    }
+                }
+            } else {
+                rx_in.recv().await
+            };
+
+            let line = match next_message {
                 Some(l) => l,
                 None => break,
             };
@@ -195,8 +214,7 @@ impl DebugServer {
                 Err(e) => {
                     warn!("Failed to parse request: {}", e);
                     let response = DebugMessage::response(
-                        0, // ID might be unknown if parse failed, but often it's available.
-                        // For now use 0 or try to extract it if possible.
+                        0,
                         DebugResponse::Error {
                             message: format!("Malformed request: {}", e),
                         },
@@ -234,6 +252,8 @@ impl DebugServer {
                 client_version,
                 protocol_min,
                 protocol_max,
+                heartbeat_interval_ms,
+                idle_timeout_ms,
             } = &request
             {
                 let server_name = "soroban-debug".to_string();
@@ -242,6 +262,35 @@ impl DebugServer {
                 match negotiate_protocol_version(*protocol_min, *protocol_max) {
                     Ok(selected_version) => {
                         handshake_done = true;
+                        // Support heartbeat/timeout negotiation
+                        heartbeat_interval = *heartbeat_interval_ms;
+                        idle_timeout = *idle_timeout_ms;
+
+                        if let Some(interval) = heartbeat_interval {
+                            info!("Negotiated heartbeat interval: {}ms", interval);
+                            let tx_heartbeat = tx_out.clone();
+                            let interval_ms = interval as u64;
+                            heartbeat_timer = Some(tokio::spawn(async move {
+                                let mut interval_timer =
+                                    tokio::time::interval(std::time::Duration::from_millis(
+                                        interval_ms,
+                                    ));
+                                // Avoid immediate tick if possible, though tokio interval ticks first.
+                                interval_timer.tick().await;
+
+                                loop {
+                                    interval_timer.tick().await;
+                                    let ping = DebugMessage::request(0, DebugRequest::Ping);
+                                    if tx_heartbeat.send(ping).is_err() {
+                                        break;
+                                    }
+                                }
+                            }));
+                        }
+                        if let Some(timeout) = idle_timeout {
+                            info!("Negotiated idle timeout: {}ms", timeout);
+                        }
+
                         let response = DebugMessage::response(
                             message.id,
                             DebugResponse::HandshakeAck {
@@ -249,7 +298,9 @@ impl DebugServer {
                                 server_version,
                                 protocol_min: PROTOCOL_MIN_VERSION,
                                 protocol_max: PROTOCOL_MAX_VERSION,
-                                selected_version,
+                                selected_version: selected_version,
+                                heartbeat_interval_ms: heartbeat_interval,
+                                idle_timeout_ms: idle_timeout,
                             },
                         );
                         send_msg(response)?;
@@ -1034,6 +1085,11 @@ fn summarize_request(request: &DebugRequest) -> String {
 }
 
 async fn setup_signal_handlers(shutdown: Arc<Notify>) {
+    #[cfg(unix)]
+    let mut ctrl_c = Box::pin(tokio::signal::ctrl_c());
+
+    #[cfg(not(unix))]
+    let ctrl_c = tokio::signal::ctrl_c();
     let mut ctrl_c = Box::pin(tokio::signal::ctrl_c());
 
     #[cfg(unix)]

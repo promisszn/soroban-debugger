@@ -131,6 +131,15 @@ esac
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BENCHMARK_THRESHOLD="${BENCHMARK_THRESHOLD:-10}"
 
+log() {
+    printf '[bench-regression] %s\n' "$*"
+}
+
+log_worktree_state() {
+    log "worktree state"
+    git -C "$REPO_ROOT" worktree list --porcelain || log "unable to read worktree list"
+}
+
 if [ -z "${BASELINE_REF:-}" ]; then
     if git -C "$REPO_ROOT" rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then
         BASELINE_REF="origin/main"
@@ -144,10 +153,35 @@ WORKTREE_DIR="$TEMP_DIR/baseline-worktree"
 WORKTREE_ADDED=0
 
 cleanup() {
+    local cleanup_failed=0
+
+    log "cleanup start"
+    log "temp dir: $TEMP_DIR"
+    log "worktree path: $WORKTREE_DIR"
+    log_worktree_state
+
     if [ "$WORKTREE_ADDED" -eq 1 ]; then
-        git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_DIR" >/dev/null 2>&1 || true
+        if git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_DIR"; then
+            log "worktree remove succeeded"
+        else
+            log "worktree remove failed; running fallback prune/remove"
+            git -C "$REPO_ROOT" worktree prune --expire now || cleanup_failed=1
+            if [ -d "$WORKTREE_DIR" ]; then
+                rm -rf "$WORKTREE_DIR" || cleanup_failed=1
+            fi
+        fi
+    else
+        log "worktree add was not completed"
     fi
-    rm -rf "$TEMP_DIR"
+
+    rm -rf "$TEMP_DIR" || cleanup_failed=1
+    log_worktree_state
+
+    if [ "$cleanup_failed" -eq 0 ]; then
+        log "cleanup complete"
+    else
+        log "cleanup complete with fallback errors"
+    fi
 }
 
 trap cleanup EXIT
@@ -158,10 +192,13 @@ if ! command -v critcmp >/dev/null 2>&1; then
     exit 2
 fi
 
-echo "Preparing baseline worktree for $BASELINE_REF..."
+log "baseline ref: $BASELINE_REF"
+log "adding detached worktree"
 git -C "$REPO_ROOT" worktree add --detach "$WORKTREE_DIR" "$BASELINE_REF"
 WORKTREE_ADDED=1
+log_worktree_state
 
+log "running benchmarks for current checkout"
 CURRENT_JSON="$TEMP_DIR/current.json"
 BASELINE_JSON="$TEMP_DIR/baseline.json"
 CURRENT_TARGET="$TEMP_DIR/current-target"
@@ -176,7 +213,7 @@ echo "Running benchmarks for the current checkout..."
         --out "$CURRENT_JSON"
 )
 
-echo "Running benchmarks for the baseline checkout..."
+log "running benchmarks for baseline checkout"
 (
     cd "$WORKTREE_DIR"
     CARGO_TARGET_DIR="$BASELINE_TARGET" cargo bench --benches -- --noplot
@@ -204,6 +241,27 @@ if [ "$status" -eq 0 ]; then
     exit 0
 fi
 
+cp -R "$BENCH_TARGET_DIR/criterion" "$CRITCMP_ROOT/target/criterion"
+
+log "comparing baselines with critcmp (threshold: ${BENCHMARK_THRESHOLD}%)"
+(
+    cd "$CRITCMP_ROOT"
+
+    set +e
+    output="$(critcmp "$BASELINE_NAME" "$CURRENT_BASELINE_NAME" --threshold "$BENCHMARK_THRESHOLD" 2>&1)"
+    status=$?
+    set -e
+
+    echo "$output"
+
+    if [ "$status" -eq 0 ]; then
+        exit 0
+    fi
+
+    if echo "$output" | grep -Fq "no benchmark comparisons to show"; then
+        echo "No overlapping benchmark IDs between '$BASELINE_NAME' and '$CURRENT_BASELINE_NAME'; skipping regression gate."
+        exit 0
+    fi
 if echo "$output" | grep -Fq "no benchmark comparisons to show"; then
     echo "No overlapping benchmark IDs; skipping regression gate."
     exit 0
