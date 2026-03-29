@@ -80,7 +80,7 @@ Legend:
 | Start debug server | `soroban-debug server --port <n>` | PARTIAL — automatic | The extension automatically spawns `soroban-debug server` as a local subprocess via `DebuggerProcess`. |
 | Configure server port | `--port <n>` on `server` command | YES — `"port"` in `launch.json` | |
 | Configure auth token | `--token <t>` on `server` command | YES — `"token"` in `launch.json` | |
-| Connect as remote client | `soroban-debug remote --remote <host:port>` | NO | The extension only manages a local server subprocess. Connecting to a pre-existing remote server is not supported from the extension. |
+| Connect as remote client | `soroban-debug remote --remote <host:port>` | YES — `"request": "attach"` in `launch.json` | Set `request: "attach"`, `host`, and `port` in `launch.json`. The extension connects to the pre-existing server without spawning a subprocess. |
 | TLS encryption — server | `--tls-cert <file> --tls-key <file>` on `server` | NO | No TLS config fields in `launch.json`. |
 | TLS encryption — client | `--tls-cert`/`--tls-key` on `remote` | NO | |
 

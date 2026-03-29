@@ -16,14 +16,20 @@ export interface DebuggerProcessConfig {
   trace?: boolean;
   binaryPath?: string;
   port?: number;
+  /**
+   * Remote host to connect to when `spawnServer` is false (attach mode).
+   * Defaults to `"127.0.0.1"` for local-only connections.
+   */
+  host?: string;
   token?: string;
   requestTimeoutMs?: number;
   connectTimeoutMs?: number;
   /**
    * When false, `start()` will only connect to an already-running debugger server
-   * at `port` and will not spawn the CLI process.
+   * at `host`:`port` and will not spawn the CLI process.
    *
-   * Intended for tests and advanced embedding.
+   * Set automatically when `request` is `"attach"` in `launch.json`.
+   * Intended for remote-attach workflows and tests.
    */
   spawnServer?: boolean;
 }
@@ -94,6 +100,7 @@ export interface LaunchPreflightIssue {
     | "entrypoint"
     | "args"
     | "port"
+    | "host"
     | "token";
   message: string;
   expected: string;
@@ -385,13 +392,13 @@ export class DebuggerProcess {
       this.emitLaunchLifecycle({
         phase: "connect",
         status: "started",
-        message: `Connecting to debugger server on port ${port}...`,
+        message: `Connecting to debugger server on ${this.config.host ?? "127.0.0.1"}:${port}...`,
       });
       await this.waitForServer(port);
       this.logManager?.log(
         LogLevel.Info,
         LogPhase.Connect,
-        `Connecting to debugger server on port ${port}...`,
+        `Connecting to debugger server on ${this.config.host ?? "127.0.0.1"}:${port}...`,
       );
       await this.connect(port);
       this.logManager?.log(
@@ -408,7 +415,7 @@ export class DebuggerProcess {
       this.emitLaunchLifecycle({
         phase: "connect",
         status: "completed",
-        message: `Connected to debugger server on port ${port}.`,
+        message: `Connected to debugger server on ${this.config.host ?? "127.0.0.1"}:${port}.`,
       });
 
       if (this.config.token) {
@@ -826,12 +833,13 @@ export class DebuggerProcess {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
-    throw new Error(`Timed out waiting for debugger server on port ${port}`);
+    throw new Error(`Timed out waiting for debugger server on ${this.config.host ?? "127.0.0.1"}:${port}`);
   }
 
   private async canConnect(port: number): Promise<boolean> {
+    const host = this.config.host ?? "127.0.0.1";
     return await new Promise<boolean>((resolve) => {
-      const socket = net.createConnection({ host: "127.0.0.1", port }, () => {
+      const socket = net.createConnection({ host, port }, () => {
         socket.destroy();
         resolve(true);
       });
@@ -844,8 +852,9 @@ export class DebuggerProcess {
   }
 
   private async connect(port: number): Promise<void> {
+    const host = this.config.host ?? "127.0.0.1";
     await new Promise<void>((resolve, reject) => {
-      const socket = net.createConnection({ host: "127.0.0.1", port }, () => {
+      const socket = net.createConnection({ host, port }, () => {
         this.socket = socket;
         resolve();
       });
@@ -1160,11 +1169,24 @@ export async function validateLaunchConfig(
         expected: "An available TCP port between 1 and 65535.",
         quickFixes: ["openLaunchConfig"],
       });
-    } else if (!(await isPortAvailable(config.port))) {
+    } else if (config.spawnServer !== false && !(await isPortAvailable(config.port))) {
+      // Only check port availability when we are spawning a local server.
+      // In attach mode (spawnServer: false) the port must already be in use.
       issues.push({
         field: "port",
         message: `Launch config field 'port' is set to ${config.port}, but that port is already in use on 127.0.0.1.`,
         expected: "An available TCP port between 1 and 65535.",
+        quickFixes: ["openLaunchConfig"],
+      });
+    }
+  }
+
+  if (config.host !== undefined) {
+    if (typeof config.host !== "string" || config.host.trim().length === 0) {
+      issues.push({
+        field: "host",
+        message: "Launch config field 'host' must be a non-empty string.",
+        expected: "A hostname or IP address such as '192.168.1.10' or 'debug.example.com'.",
         quickFixes: ["openLaunchConfig"],
       });
     }

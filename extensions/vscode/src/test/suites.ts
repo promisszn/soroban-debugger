@@ -437,6 +437,70 @@ export async function runSmokeSuite(): Promise<void> {
   assert.equal(badToken.ok, false, "Expected blank token to fail preflight");
   assert.equal(badToken.issues[0].field, "token");
 
+  // --- Attach mode preflight tests ---
+
+  // attach with valid host + port (port must be in use, so we spin up a mock)
+  const attachMock = await startMockDebuggerServer({ evaluateDelayMs: 0 });
+  const goodAttach = await validateLaunchConfig({
+    binaryPath: preflightBinaryPath,
+    contractPath: fixtures.contractPath,
+    entrypoint: "echo",
+    args: [],
+    host: "127.0.0.1",
+    port: attachMock.port,
+    spawnServer: false,
+  });
+  await attachMock.close();
+  assert.equal(
+    goodAttach.ok,
+    true,
+    "Expected valid attach config to pass preflight",
+  );
+
+  // attach with blank host should fail
+  const badHost = await validateLaunchConfig({
+    binaryPath: preflightBinaryPath,
+    contractPath: fixtures.contractPath,
+    entrypoint: "echo",
+    args: [],
+    host: "   ",
+    port: 2345,
+    spawnServer: false,
+  });
+  assert.equal(badHost.ok, false, "Expected blank host to fail preflight");
+  assert.equal(badHost.issues[0].field, "host");
+
+  // --- Attach mode connect tests ---
+
+  // success: attach to a running mock server
+  const attachSuccessMock = await startMockDebuggerServer({ evaluateDelayMs: 0 });
+  const attachProcess = new DebuggerProcess({
+    contractPath: "mock.wasm",
+    host: "127.0.0.1",
+    port: attachSuccessMock.port,
+    spawnServer: false,
+  });
+  await attachProcess.start();
+  await attachProcess.ping();
+  await attachProcess.stop();
+  await attachSuccessMock.close();
+  console.log("Attach mode success test passed");
+
+  // failure: attach to a port with nothing listening
+  const noServerProcess = new DebuggerProcess({
+    contractPath: "mock.wasm",
+    host: "127.0.0.1",
+    port: 19999,
+    spawnServer: false,
+    connectTimeoutMs: 500,
+  });
+  await assert.rejects(
+    noServerProcess.start(),
+    (err: unknown) => err instanceof Error,
+    "Expected attach to unreachable port to reject",
+  );
+  console.log("Attach mode failure test passed");
+
   if (!fs.existsSync(fixtures.binaryPath)) {
     console.log(
       `Skipping debugger smoke test because the CLI binary was not found at ${fixtures.binaryPath}`,

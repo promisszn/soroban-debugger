@@ -160,6 +160,7 @@ export class SorobanDebugSession extends DebugSession {
         trace: args.trace || false,
         binaryPath: args.binaryPath,
         port: args.port,
+        host: args.host,
         token: args.token,
         requestTimeoutMs: args.requestTimeoutMs,
         connectTimeoutMs: args.connectTimeoutMs
@@ -185,6 +186,47 @@ export class SorobanDebugSession extends DebugSession {
         : `Failed to launch debugger: ${String(error)}`;
       this.sendErrorResponse(response, {
         id: 1001,
+        format: message,
+        showUser: true
+      });
+    }
+  }
+
+  protected async attachRequest(
+    response: DebugProtocol.AttachResponse,
+    args: DebugProtocol.AttachRequestArguments & DebuggerProcessConfig
+  ): Promise<void> {
+    this.logManager?.log(ManagerLogLevel.Info, LogPhase.DAP, `AttachRequest: ${JSON.stringify(args)}`);
+    try {
+      const attachConfig: DebuggerProcessConfig = { ...args, spawnServer: false };
+      const preflight = await validateLaunchConfig(attachConfig);
+      if (!preflight.ok) {
+        const issue = preflight.issues[0];
+        throw new Error(`${issue.message} Expected: ${issue.expected}`);
+      }
+
+      this.debuggerProcess = new DebuggerProcess(attachConfig, this.logManager, this.launchLifecycleReporter);
+
+      await this.debuggerProcess.start();
+      this.state.isRunning = true;
+      this.state.isPaused = false;
+      this.hasExecuted = false;
+      this.variableStore.reset();
+      this.exportedFunctions = await this.debuggerProcess.getContractFunctions();
+      this.backendCapabilities = await this.debuggerProcess.getCapabilities().catch(() => ({
+        conditionalBreakpoints: false,
+        hitConditionalBreakpoints: false,
+        logPoints: false
+      }));
+
+      this.attachProcessListeners();
+      this.sendResponse(response);
+    } catch (error) {
+      const message = error instanceof DebuggerTimeoutError
+        ? `Failed to attach to debugger (timeout): ${error.message}\n\nNext steps: ensure the remote server is running and reachable at the configured host:port, then retry.`
+        : `Failed to attach to debugger: ${String(error)}`;
+      this.sendErrorResponse(response, {
+        id: 1002,
         format: message,
         showUser: true
       });
