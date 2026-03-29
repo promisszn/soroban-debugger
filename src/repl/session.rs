@@ -211,6 +211,7 @@ impl ReplSession {
         let cmd = ReplCommand::parse(line)?;
 
         match cmd {
+            ReplCommand::Noop => Ok(false),
             ReplCommand::Exit => Ok(true),
             ReplCommand::Help => {
                 self.print_help();

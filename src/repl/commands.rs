@@ -6,6 +6,8 @@ use crate::Result;
 /// Represents a REPL command
 #[derive(Debug, Clone)]
 pub enum ReplCommand {
+    /// No operation for empty input
+    Noop,
     /// Call a contract function: call <function> [args...]
     Call {
         function: String,
@@ -59,7 +61,7 @@ impl ReplCommand {
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
 
         if parts.is_empty() {
-            return Err(miette::miette!("Empty command"));
+            return Ok(ReplCommand::Noop);
         }
 
         match parts[0] {
@@ -143,6 +145,12 @@ mod tests {
     fn test_parse_help_command() {
         let cmd = ReplCommand::parse("help").unwrap();
         assert!(matches!(cmd, ReplCommand::Help));
+    }
+
+    #[test]
+    fn test_empty_input_is_noop() {
+        let cmd = ReplCommand::parse("   ").unwrap();
+        assert!(matches!(cmd, ReplCommand::Noop));
     }
 
     #[test]
