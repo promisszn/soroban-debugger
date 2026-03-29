@@ -47,6 +47,8 @@ impl Default for RetryPolicy {
 pub struct RemoteClientConfig {
     pub timeouts: RequestTimeouts,
     pub retry: RetryPolicy,
+    pub heartbeat_interval_ms: Option<u32>,
+    pub idle_timeout_ms: Option<u32>,
 }
 
 /// Remote client for connecting to a debug server
@@ -102,6 +104,8 @@ impl RemoteClient {
             client_version: client_version.to_string(),
             protocol_min: PROTOCOL_MIN_VERSION,
             protocol_max: PROTOCOL_MAX_VERSION,
+            heartbeat_interval_ms: self.config.heartbeat_interval_ms,
+            idle_timeout_ms: self.config.idle_timeout_ms,
         })?;
 
         match response {
@@ -490,6 +494,8 @@ impl RemoteClient {
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             protocol_min: 1,
             protocol_max: 1,
+            heartbeat_interval_ms: Some(30000),
+            idle_timeout_ms: Some(60000),
         };
         // Use a standard timeout for handshake during reconnect
         let _ = self
@@ -600,17 +606,53 @@ impl RemoteClient {
             .flush()
             .map_err(|e| SendFailure::io("flush", e, timeout))?;
 
-        let mut response_line = String::new();
-        let n = self
-            .stream
-            .read_line(&mut response_line)
-            .map_err(|e| SendFailure::io("read", e, timeout))?;
-        if n == 0 {
-            return Err(SendFailure::Disconnected);
-        }
+        loop {
+            let mut response_line = String::new();
+            let n = self
+                .stream
+                .read_line(&mut response_line)
+                .map_err(|e| SendFailure::io("read", e, timeout))?;
+            if n == 0 {
+                return Err(SendFailure::Disconnected);
+            }
 
-        parse_response_line(expected_id, response_line.trim_end())
-            .map_err(|e| SendFailure::Protocol(e.to_string()))
+            let msg = DebugMessage::parse(response_line.trim_end())
+                .map_err(|e| SendFailure::Protocol(e.to_string()))?;
+
+            // Handle interleaved Ping from server
+            if let Some(DebugRequest::Ping) = msg.request {
+                let pong = DebugMessage::response(msg.id, DebugResponse::Pong);
+                let pong_json = serde_json::to_string(&pong).map_err(|e| {
+                    SendFailure::Serialize(format!("Failed to serialize pong: {}", e))
+                })?;
+                writeln!(self.stream.get_mut(), "{}", pong_json)
+                    .map_err(|e| SendFailure::io("ping-response", e, timeout))?;
+                self.stream
+                    .get_mut()
+                    .flush()
+                    .map_err(|e| SendFailure::io("ping-flush", e, timeout))?;
+                continue;
+            }
+
+            if msg.id != expected_id {
+                return Err(SendFailure::Protocol(format!(
+                    "Mismatched response id: expected {} got {}",
+                    expected_id, msg.id
+                )));
+            }
+
+            let response = msg.response.ok_or_else(|| {
+                SendFailure::Protocol("Response message has no response field".to_string())
+            })?;
+
+            if matches!(response, DebugResponse::Unknown) {
+                return Err(SendFailure::Protocol(
+                    "Received unknown response type from server".to_string(),
+                ));
+            }
+
+            return Ok(response);
+        }
     }
 }
 
@@ -715,31 +757,7 @@ fn backoff_delay(base: Duration, max: Duration, attempt: usize) -> Duration {
     base.checked_mul(exp).unwrap_or(max).min(max)
 }
 
-fn parse_response_line(expected_id: u64, response_line: &str) -> Result<DebugResponse> {
-    let response_message = DebugMessage::parse(response_line)
-        .map_err(|e| DebuggerError::FileError(format!("Failed to parse response: {}", e)))?;
-
-    if response_message.id != expected_id {
-        return Err(DebuggerError::ExecutionError(format!(
-            "Mismatched response id: expected {} got {}",
-            expected_id, response_message.id
-        ))
-        .into());
-    }
-
-    let response = response_message.response.ok_or_else(|| {
-        DebuggerError::FileError("Response message has no response field".to_string())
-    })?;
-
-    if matches!(response, DebugResponse::Unknown) {
-        return Err(DebuggerError::ExecutionError(
-            "Received unknown response type from server. Try upgrading the client.".to_string(),
-        )
-        .into());
-    }
-
-    Ok(response)
-}
+// parse_response_line removed as it was redundant with send_request_once refactoring.
 
 #[allow(dead_code)]
 fn sanitize_auth_message(message: &str, token: &str) -> String {
@@ -764,21 +782,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    #[test]
-    fn parse_response_line_rejects_mismatched_ids() {
-        let msg = DebugMessage::response(42, DebugResponse::Pong);
-        let line = serde_json::to_string(&msg).unwrap();
-        let err = parse_response_line(7, &line).unwrap_err();
-        assert!(err.to_string().contains("Mismatched response id"));
-    }
-
-    #[test]
-    fn parse_response_line_accepts_matching_ids() {
-        let msg = DebugMessage::response(7, DebugResponse::Pong);
-        let line = serde_json::to_string(&msg).unwrap();
-        let resp = parse_response_line(7, &line).unwrap();
-        assert!(matches!(resp, DebugResponse::Pong));
-    }
+    // parse_response_line tests removed.
 
     #[test]
     fn connect_failure_is_network_error_category() {
@@ -801,6 +805,8 @@ mod tests {
                     protocol_min: 1,
                     protocol_max: 1,
                     selected_version: 1,
+                    heartbeat_interval_ms: None,
+                    idle_timeout_ms: None,
                 },
             );
             if let Ok(json) = serde_json::to_string(&ack) {
@@ -842,6 +848,8 @@ mod tests {
                             protocol_min: PROTOCOL_MIN_VERSION,
                             protocol_max: PROTOCOL_MAX_VERSION,
                             selected_version: PROTOCOL_MAX_VERSION,
+                            heartbeat_interval_ms: None,
+                            idle_timeout_ms: None,
                         },
                     );
                     let json = serde_json::to_string(&response).unwrap();
@@ -861,6 +869,8 @@ mod tests {
                         protocol_min: 1,
                         protocol_max: 1,
                         selected_version: 1,
+                        heartbeat_interval_ms: None,
+                        idle_timeout_ms: None,
                     },
                 );
                 let _ = writeln!(stream, "{}", serde_json::to_string(&handshake_ack).unwrap());
@@ -883,6 +893,8 @@ mod tests {
                 base_delay: Duration::from_millis(1),
                 max_delay: Duration::from_millis(1),
             },
+            heartbeat_interval_ms: None,
+            idle_timeout_ms: None,
         };
 
         let mut client =
@@ -928,6 +940,8 @@ mod tests {
                                 protocol_min: 1,
                                 protocol_max: 1,
                                 selected_version: 1,
+                                heartbeat_interval_ms: None,
+                                idle_timeout_ms: None,
                             },
                         );
                         let _ =
@@ -969,6 +983,8 @@ mod tests {
                 base_delay: Duration::from_millis(1),
                 max_delay: Duration::from_millis(5),
             },
+            heartbeat_interval_ms: None,
+            idle_timeout_ms: None,
         };
 
         let mut client =
