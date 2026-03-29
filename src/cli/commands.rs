@@ -669,9 +669,9 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
     }
 
     // Execute locally with debugging
-    if !args.is_json_output() {
-        println!("\n--- Execution Start ---\n");
-    }
+    // if !args.is_json_output() {
+    //     println!("\n--- Execution Start ---\n");
+    // }
     if args.instruction_debug {
         print_info("Enabling instruction-level debugging...");
         engine.enable_instruction_debug(&wasm_bytes)?;
@@ -687,7 +687,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
             return Ok(());
         }
     }
-
+    
     print_info("\n--- Execution Start ---\n");
     output_writer.write("\n--- Execution Start ---\n")?;
     let storage_before = engine.executor().get_storage_snapshot()?;

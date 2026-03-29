@@ -463,6 +463,7 @@ pub fn check_api_version(plugin_version: u32) -> Result<(), crate::plugin::api::
     }
     Ok(())
 }
+    } }
 
 #[cfg(test)]
 mod tests {
@@ -522,6 +523,7 @@ mod version_tests {
     fn test_api_version_check() {
         let result = check_api_version(999);
         assert!(matches!(result, Err(PluginError::VersionMismatch { .. })));
+    }
 
     #[test]
     fn test_loader_creation() {
@@ -663,3 +665,6 @@ mod version_tests {
         );
         let result_ok = check_api_version(PLUGIN_API_VERSION);
         assert!(result_ok.is_ok());
+    }
+}
+}
