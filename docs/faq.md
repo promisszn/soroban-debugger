@@ -57,29 +57,19 @@ soroban-debug inspect --contract my_contract.wasm
 ```
 
 ### 6. Contract panics with "Host error: Unknown error"
-**Cause:** This usually happens when an assertion fails or an unexpected state is reached during execution.
-**Fix:** Start an interactive session to step through the code and identify the exact instruction causing the panic:
-```bash
-soroban-debug interactive --contract my_contract.wasm
-```
-
-### 7. Watch mode (`--watch`) doesn't reload when I save my Rust code
-**Cause:** Watch mode monitors the **WASM file**, not your Rust source files.
-**Fix:** You need a separate process (like `cargo watch`) to rebuild your WASM file. Once the WASM file is updated on disk, `soroban-debug` will detect the change and re-run.
-
 ---
 
 ## Breakpoints
 
-### 8. Breakpoints are not triggering
+### 7. Breakpoints are not triggering
 **Cause:** You might be setting a breakpoint on a function that is never called, or the function name is slightly different (e.g., due to name mangling, though Soroban usually keeps them clean).
 **Fix:** Verify the function name using `soroban-debug inspect`. In `interactive` mode, use `list-breaks` to ensure your breakpoints are registered.
 
-### 9. Can I set a breakpoint on a specific line number?
+### 8. Can I set a breakpoint on a specific line number?
 **Answer:** Currently, the debugger supports setting breakpoints only at **function boundaries**.
 **Workaround:** Set a breakpoint at the function containing the line, then use `s` (step) or `n` (next) to reach the specific line you're interested in.
 
-### 10. Why does VS Code show `verified=false` but the breakpoint still hits?
+### 9. Why does VS Code show `verified=false` but the breakpoint still hits?
 **Cause:** Source verification and runtime binding are different decisions in the adapter.
 **Meaning:**
 - `verified=false` means an exact source map proof was not available.
@@ -92,11 +82,11 @@ soroban-debug interactive --contract my_contract.wasm
 
 ## Budget
 
-### 11. Why am I getting "Warning: High CPU usage detected"?
+### 10. Why am I getting "Warning: High CPU usage detected"?
 **Cause:** The contract has consumed a significant portion of the Soroban CPU budget.
 **Fix:** Optimize expensive loops, reduce deep recursion, or minimize complex storage operations. Use the `budget` command in interactive mode to see which parts of your code are the most "expensive".
 
-### 12. "Budget exceeded" error during debugging
+### 11. "Budget exceeded" error during debugging
 **Cause:** The execution hit the maximum allowed Soroban resource limits.
 **Fix:** Check for infinite loops or extremely inefficient algorithms. You can also try to provide a larger initial budget if your local environment allows (though on-chain limits will still apply).
 
