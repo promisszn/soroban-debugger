@@ -1,5 +1,5 @@
 use crate::debugger::engine::DebuggerEngine;
-use crate::inspector::{BudgetInspector, StorageInspector};
+use crate::inspector::BudgetInspector;
 use crate::Result;
 use std::io::{self, Write};
 
@@ -12,7 +12,6 @@ struct PendingExecution {
 /// Terminal user interface for interactive debugging.
 pub struct DebuggerUI {
     engine: DebuggerEngine,
-    storage_inspector: StorageInspector,
     pending_execution: Option<PendingExecution>,
     last_output: Option<String>,
     last_error: Option<String>,
@@ -22,7 +21,6 @@ impl DebuggerUI {
     pub fn new(engine: DebuggerEngine) -> Result<Self> {
         Ok(Self {
             engine,
-            storage_inspector: StorageInspector::new(),
             pending_execution: None,
             last_output: None,
             last_error: None,
@@ -155,7 +153,7 @@ impl DebuggerUI {
                 }
             }
             "storage" => {
-                self.storage_inspector.display();
+                self.display_storage()?;
             }
             "stack" => {
                 if let Ok(state) = self.engine.state().lock() {
@@ -255,6 +253,32 @@ impl DebuggerUI {
         }
     }
 
+    fn display_storage(&self) -> Result<()> {
+        let entries = self.engine.executor().get_storage_snapshot()?;
+
+        if entries.is_empty() {
+            crate::logging::log_display("Storage is empty", crate::logging::LogLevel::Warn);
+            return Ok(());
+        }
+
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=== Contract Storage ===", crate::logging::LogLevel::Info);
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+
+        let mut items: Vec<_> = entries.iter().collect();
+        items.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
+
+        for (key, value) in items {
+            crate::logging::log_display(
+                format!("  {}: {}", key, value),
+                crate::logging::LogLevel::Info,
+            );
+        }
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+
+        Ok(())
+    }
+
     fn print_help(&self) {
         crate::logging::log_display(
             "Interactive debugger commands:",
@@ -277,7 +301,7 @@ impl DebuggerUI {
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
-            "  storage            Show tracked storage view",
+            "  storage            Show current contract storage",
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
