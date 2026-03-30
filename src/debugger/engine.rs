@@ -285,16 +285,16 @@ impl DebuggerEngine {
             stack.push(current_func, None);
 
             for event in events {
-                let event_str = format!("{:?}", event);
-                if event_str.contains("ContractCall")
-                    || (event_str.contains("call") && event.contract_id.is_some())
-                {
-                    let contract_id = event.contract_id.as_ref().map(|cid| format!("{:?}", cid));
-                    stack.push("nested_call".to_string(), contract_id);
-                } else if (event_str.contains("ContractReturn") || event_str.contains("return"))
-                    && stack.get_stack().len() > 1
-                {
-                    stack.pop();
+                // Check if this is a diagnostic event by examining the event topics
+                if let Some(first_topic) = self.get_first_event_topic(&event) {
+                    if first_topic == "fn_call" {
+                        // This is a cross-contract call
+                        let contract_id = event.contract_id.as_ref().map(|cid| format!("{:?}", cid));
+                        stack.push("nested_call".to_string(), contract_id);
+                    } else if first_topic == "fn_return" && stack.get_stack().len() > 1 {
+                        // This is a return from a cross-contract call
+                        stack.pop();
+                    }
                 }
             }
 
@@ -305,6 +305,29 @@ impl DebuggerEngine {
         }
 
         Ok(())
+    }
+
+    /// Extract the first topic from a ContractEvent as a string, if available
+    fn get_first_event_topic(&self, event: &soroban_env_host::xdr::ContractEvent) -> Option<String> {
+        match &event.body {
+            soroban_env_host::xdr::ContractEventBody::V0(v0) => {
+                if let Some(first_topic) = v0.topics.first() {
+                    // Check if the topic is a Symbol and extract its value
+                    match first_topic {
+                        soroban_env_host::xdr::ScVal::Symbol(sym) => {
+                            // Convert the symbol bytes to a string
+                            String::from_utf8(sym.0.clone()).ok()
+                        }
+                        _ => {
+                            // For non-symbol topics, fall back to debug format
+                            Some(format!("{:?}", first_topic))
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     /// Step into next instruction.
@@ -513,3 +536,6 @@ impl DebuggerEngine {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
