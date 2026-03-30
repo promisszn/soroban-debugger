@@ -262,6 +262,26 @@ impl BreakpointManager {
         self.breakpoints.len()
     }
 
+    /// Parse a condition string into a Condition object
+    /// Note: This feature is not yet fully implemented
+    #[allow(dead_code)]
+    pub fn parse_condition(s: &str) -> crate::Result<()> {
+        use crate::DebuggerError;
+
+        let trimmed = s.trim();
+        let Some((op, pos)) = find_operator(trimmed) else {
+            return Err(DebuggerError::BreakpointError(
+                "Condition must contain a comparison operator".to_string(),
+            )
+            .into());
+        };
+
+        let lhs = trimmed[..pos].trim();
+        let rhs = trimmed[pos + op.len()..].trim();
+
+        if lhs.is_empty() || rhs.is_empty() {
+            return Err(DebuggerError::BreakpointError(
+                "Condition must include non-empty left and right operands".to_string(),
     /// Parse a condition string into a validated Condition
     /// This validates syntax but doesn't evaluate it
     pub fn parse_condition(s: &str) -> crate::Result<String> {
@@ -296,6 +316,10 @@ impl BreakpointManager {
             .into());
         }
 
+        Err(DebuggerError::BreakpointError(
+            "Conditional breakpoints are not yet implemented".to_string(),
+        )
+        .into())
         // Validate hit condition format
         if !is_valid_hit_condition(s) {
             return Err(crate::DebuggerError::BreakpointError(format!(
@@ -455,6 +479,8 @@ impl Default for BreakpointManager {
 }
 
 #[cfg(test)]
+ mod tests {
+    fn test_add_breakpoint() {
 mod tests {
     use super::*;
 
@@ -731,6 +757,45 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_condition_missing_operator_fails() {
+        let result = BreakpointManager::parse_condition("balance 1000");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("comparison operator"));
+    }
+
+    #[test]
+    fn test_parse_condition_missing_lhs_fails() {
+        let result = BreakpointManager::parse_condition("> 1000");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("left and right operands"));
+    }
+
+    #[test]
+    fn test_parse_condition_missing_rhs_fails() {
+        let result = BreakpointManager::parse_condition("balance > ");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("left and right operands"));
+    }
+
+    #[test]
+    fn test_parse_condition_valid_structure_still_not_implemented() {
+        let result = BreakpointManager::parse_condition("balance > 1000");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("not yet implemented"));
+    }
+}
     fn test_parse_condition_validation() {
         // Valid conditions
         assert!(BreakpointManager::parse_condition("balance > 1000").is_ok());
