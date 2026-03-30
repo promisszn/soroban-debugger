@@ -1,13 +1,21 @@
-use crate::debugger::breakpoint::BreakpointManager;
+use crate::debugger::breakpoint::{BreakpointManager, ConditionEvaluator};
 use crate::debugger::instruction_pointer::StepMode;
+use crate::debugger::source_map::{SourceLocation, SourceMap};
 use crate::debugger::state::DebugState;
 use crate::debugger::stepper::Stepper;
+use crate::plugin::{EventContext, ExecutionEvent};
 use crate::runtime::executor::ContractExecutor;
 use crate::runtime::instruction::Instruction;
 use crate::runtime::instrumentation::Instrumenter;
 use crate::Result;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::info;
+
+pub struct StepOverResult {
+    pub paused: bool,
+    pub location: Option<SourceLocation>,
+}
 
 /// Core debugging engine that orchestrates execution and debugging.
 pub struct DebuggerEngine {
@@ -16,18 +24,114 @@ pub struct DebuggerEngine {
     state: Arc<Mutex<DebugState>>,
     stepper: Stepper,
     instrumenter: Instrumenter,
+    source_map: Option<SourceMap>,
     paused: bool,
     instruction_debug_enabled: bool,
 }
 
+struct EngineConditionEvaluator {
+    storage: HashMap<String, String>,
+}
+
+impl EngineConditionEvaluator {
+    fn new(storage: HashMap<String, String>) -> Self {
+        Self { storage }
+    }
+
+    fn parse_condition<'a>(&self, condition: &'a str) -> crate::Result<(&'a str, &'a str, &'a str)> {
+        let condition = condition.trim();
+        let (var, op, value) = if let Some(pos) = condition.find(">=") {
+            let (var, rest) = condition.split_at(pos);
+            (var.trim(), ">=", rest[2..].trim())
+        } else if let Some(pos) = condition.find("<=") {
+            let (var, rest) = condition.split_at(pos);
+            (var.trim(), "<=", rest[2..].trim())
+        } else if let Some(pos) = condition.find("==") {
+            let (var, rest) = condition.split_at(pos);
+            (var.trim(), "==", rest[2..].trim())
+        } else if let Some(pos) = condition.find("!=") {
+            let (var, rest) = condition.split_at(pos);
+            (var.trim(), "!=", rest[2..].trim())
+        } else if let Some(pos) = condition.find('>') {
+            let (var, rest) = condition.split_at(pos);
+            (var.trim(), ">", rest[1..].trim())
+        } else if let Some(pos) = condition.find('<') {
+            let (var, rest) = condition.split_at(pos);
+            (var.trim(), "<", rest[1..].trim())
+        } else {
+            return Err(crate::DebuggerError::BreakpointError(format!(
+                "No operator found in condition: {}",
+                condition
+            ))
+            .into());
+        };
+
+        Ok((var, op, value))
+    }
+
+    fn normalize_value(value: &str) -> &str {
+        value.trim_matches('"').trim_matches('\'')
+    }
+}
+
+impl ConditionEvaluator for EngineConditionEvaluator {
+    fn evaluate(&self, condition: &str) -> crate::Result<bool> {
+        let (var, op, value_str) = self.parse_condition(condition)?;
+        let actual = self
+            .storage
+            .get(var)
+            .map(String::as_str)
+            .unwrap_or_default()
+            .trim();
+        let actual = Self::normalize_value(actual);
+        let expected = Self::normalize_value(value_str);
+
+        if let (Ok(lhs), Ok(rhs)) = (actual.parse::<f64>(), expected.parse::<f64>()) {
+            return Ok(match op {
+                "==" => lhs == rhs,
+                "!=" => lhs != rhs,
+                ">" => lhs > rhs,
+                "<" => lhs < rhs,
+                ">=" => lhs >= rhs,
+                "<=" => lhs <= rhs,
+                _ => false,
+            });
+        }
+
+        Ok(match op {
+            "==" => actual == expected,
+            "!=" => actual != expected,
+            ">" => actual > expected,
+            "<" => actual < expected,
+            ">=" => actual >= expected,
+            "<=" => actual <= expected,
+            _ => false,
+        })
+    }
+
+    fn interpolate_log(&self, template: &str) -> crate::Result<String> {
+        let mut rendered = template.to_string();
+        for (key, value) in &self.storage {
+            rendered = rendered.replace(&format!("{{{}}}", key), value);
+        }
+        Ok(rendered)
+    }
+}
+
 impl DebuggerEngine {
+    /// Returns the current paused source location (file, line, column) if available.
+    pub fn current_source_location(&self) -> Option<crate::debugger::source_map::SourceLocation> {
+        let state = self.state.lock().ok()?;
+        let inst = state.current_instruction()?;
+        self.lookup_source_location(inst.offset)
+    }
     /// Create a new debugger engine.
     #[tracing::instrument(skip_all)]
     pub fn new(executor: ContractExecutor, initial_breakpoints: Vec<String>) -> Self {
         let mut breakpoints = BreakpointManager::new();
 
         for bp in initial_breakpoints {
-            breakpoints.add(&bp);
+            breakpoints.add_simple(&bp);
             info!("Breakpoint set at function: {}", bp);
         }
 
@@ -37,48 +141,11 @@ impl DebuggerEngine {
             state: Arc::new(Mutex::new(DebugState::new())),
             stepper: Stepper::new(),
             instrumenter: Instrumenter::new(),
+            source_map: None,
             paused: false,
-            instruction_debug_enabled: false,
-        }
-    }
-
-    /// Enable instruction-level debugging.
-    pub fn enable_instruction_debug(&mut self, wasm_bytes: &[u8]) -> Result<()> {
-        let instructions = self
-            .instrumenter
-            .parse_instructions(wasm_bytes)
-            .map_err(|e| miette::miette!("Failed to parse instructions: {}", e))?
-            .to_vec();
-
-        if let Ok(mut state) = self.state.lock() {
-            state.set_instructions(instructions);
-            state.enable_instruction_debug();
-        }
-
-        self.instrumenter.enable();
-        self.instruction_debug_enabled = true;
-        Ok(())
-    }
-
-    /// Disable instruction-level debugging.
-    pub fn disable_instruction_debug(&mut self) {
-        self.instrumenter.disable();
-        self.instrumenter.remove_hook();
-        if let Ok(mut state) = self.state.lock() {
-            state.disable_instruction_debug();
-        }
-        self.instruction_debug_enabled = false;
-    }
-
-    /// Check if instruction-level debugging is enabled.
-    pub fn is_instruction_debug_enabled(&self) -> bool {
-        self.instruction_debug_enabled
-    }
-
-    /// Execute a contract function with debugging.
-    #[tracing::instrument(skip(self), fields(function = function))]
-    pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<String> {
+            ) -> Result<String> {
         info!("Executing function: {}", function);
+        self.paused = false;
 
         if let Ok(mut state) = self.state.lock() {
             state.set_current_function(function.to_string(), args.map(str::to_string));
@@ -86,8 +153,39 @@ impl DebuggerEngine {
             state.call_stack_mut().push(function.to_string(), None);
         }
 
-        if self.breakpoints.should_break(function) {
-            self.pause_at_function(function);
+        let mut plugin_ctx = EventContext::new();
+        plugin_ctx.stack_depth = self
+            .state
+            .lock()
+            .map(|s| s.call_stack().get_stack().len())
+            .unwrap_or(0);
+        plugin_ctx.is_paused = self.paused;
+        crate::plugin::registry::dispatch_global_event(
+            &ExecutionEvent::BeforeFunctionCall {
+                function: function.to_string(),
+                args: args.map(str::to_string),
+            },
+            &mut plugin_ctx,
+        );
+
+        if check_breakpoints {
+            let storage = self.executor.get_storage_snapshot().unwrap_or_default();
+            let evaluator = EngineConditionEvaluator::new(storage);
+            let (should_pause, log_output) = self
+                .breakpoints_mut()
+                .should_break_with_context(function, &evaluator)?;
+
+            if let Some(message) = log_output {
+                println!("{message}");
+            }
+
+            if should_pause {
+                let condition = self
+                    .breakpoints()
+                    .get_breakpoint(function)
+                    .and_then(|bp| bp.condition.clone());
+                self.pause_at_function(function, condition);
+            }
         }
 
         let start_time = std::time::Instant::now();
@@ -96,122 +194,21 @@ impl DebuggerEngine {
 
         self.update_call_stack(duration)?;
 
+        let event_result = match &result {
+            Ok(output) => Ok(output.clone()),
+            Err(e) => Err(e.to_string()),
+        };
+        crate::plugin::registry::dispatch_global_event(
+            &ExecutionEvent::AfterFunctionCall {
+                function: function.to_string(),
+                result: event_result,
+                duration,
+            },
+            &mut plugin_ctx,
+        );
+
         if let Err(ref e) = result {
             tracing::error!("Execution failed: {}", e);
-            if let Ok(state) = self.state.lock() {
-                state.call_stack().display();
-            }
-        } else if self.is_paused() {
-            if let Ok(state) = self.state.lock() {
-                state.call_stack().display();
-            }
-        }
-
-        result
-    }
-
-    fn update_call_stack(&mut self, total_duration: std::time::Duration) -> Result<()> {
-        let events = self.executor.get_diagnostic_events()?;
-
-        let current_func = if let Ok(state) = self.state.lock() {
-            state.current_function().unwrap_or("entry").to_string()
-        } else {
-            "entry".to_string()
-        };
-
-        if let Ok(mut state) = self.state.lock() {
-            let stack = state.call_stack_mut();
-            stack.clear();
-            stack.push(current_func, None);
-
-            for event in events {
-                let event_str = format!("{:?}", event);
-                if event_str.contains("ContractCall")
-                    || (event_str.contains("call") && event.contract_id.is_some())
-                {
-                    let contract_id = event.contract_id.as_ref().map(|cid| format!("{:?}", cid));
-                    stack.push("nested_call".to_string(), contract_id);
-                } else if (event_str.contains("ContractReturn") || event_str.contains("return"))
-                    && stack.get_stack().len() > 1
-                {
-                    stack.pop();
-                }
-            }
-
-            if let Some(mut frame) = stack.pop() {
-                frame.duration = Some(total_duration);
-                stack.push_frame(frame);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Step into next instruction.
-    pub fn step_into(&mut self) -> Result<bool> {
-        if !self.instruction_debug_enabled {
-            return Err(miette::miette!("Instruction debugging not enabled"));
-        }
-
-        let stepped = if let Ok(mut state) = self.state.lock() {
-            self.stepper.step_into(&mut state)
-        } else {
-            false
-        };
-        self.paused = stepped;
-        Ok(stepped)
-    }
-
-    /// Step over function calls.
-    pub fn step_over(&mut self) -> Result<bool> {
-        if !self.instruction_debug_enabled {
-            return Err(miette::miette!("Instruction debugging not enabled"));
-        }
-
-        let stepped = if let Ok(mut state) = self.state.lock() {
-            self.stepper.step_over(&mut state)
-        } else {
-            false
-        };
-        self.paused = stepped;
-        Ok(stepped)
-    }
-
-    /// Step out of current function.
-    pub fn step_out(&mut self) -> Result<bool> {
-        if !self.instruction_debug_enabled {
-            return Err(miette::miette!("Instruction debugging not enabled"));
-        }
-
-        let stepped = if let Ok(mut state) = self.state.lock() {
-            self.stepper.step_out(&mut state)
-        } else {
-            false
-        };
-        self.paused = stepped;
-        Ok(stepped)
-    }
-
-    /// Step to next basic block.
-    pub fn step_block(&mut self) -> Result<bool> {
-        if !self.instruction_debug_enabled {
-            return Err(miette::miette!("Instruction debugging not enabled"));
-        }
-
-        let stepped = if let Ok(mut state) = self.state.lock() {
-            self.stepper.step_block(&mut state)
-        } else {
-            false
-        };
-        self.paused = stepped;
-        Ok(stepped)
-    }
-
-    /// Step backwards to previous instruction.
-    pub fn step_back(&mut self) -> Result<bool> {
-        if !self.instruction_debug_enabled {
-            return Err(miette::miette!("Instruction debugging not enabled"));
-        }
 
         let stepped = if let Ok(mut state) = self.state.lock() {
             self.stepper.step_back(&mut state)
