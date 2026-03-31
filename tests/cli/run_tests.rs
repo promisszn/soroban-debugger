@@ -64,7 +64,10 @@ fn test_run_remote_mode_does_not_require_contract_or_function() {
         .arg(test_remote_addr())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Network/transport error").or(predicate::str::contains("connect")));
+        .stderr(
+            predicate::str::contains("Network/transport error")
+                .or(predicate::str::contains("connect")),
+        );
 }
 
 #[test]
@@ -84,7 +87,10 @@ fn test_run_remote_mode_accepts_optional_contract_function() {
         .arg("test")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Network/transport error").or(predicate::str::contains("connect")));
+        .stderr(
+            predicate::str::contains("Network/transport error")
+                .or(predicate::str::contains("connect")),
+        );
 }
 
 #[test]
@@ -180,7 +186,10 @@ fn test_remote_inspect_subcommand_accepted() {
         .arg("inspect")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Network/transport error").or(predicate::str::contains("connect")));
+        .stderr(
+            predicate::str::contains("Network/transport error")
+                .or(predicate::str::contains("connect")),
+        );
 }
 
 #[test]
@@ -192,7 +201,10 @@ fn test_remote_storage_subcommand_accepted() {
         .arg("storage")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Network/transport error").or(predicate::str::contains("connect")));
+        .stderr(
+            predicate::str::contains("Network/transport error")
+                .or(predicate::str::contains("connect")),
+        );
 }
 
 #[test]
@@ -206,7 +218,10 @@ fn test_remote_evaluate_subcommand_accepted() {
         .arg("1 + 1")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Network/transport error").or(predicate::str::contains("connect")));
+        .stderr(
+            predicate::str::contains("Network/transport error")
+                .or(predicate::str::contains("connect")),
+        );
 }
 
 #[test]
@@ -222,5 +237,8 @@ fn test_remote_evaluate_with_frame_id() {
         .arg("0")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Network/transport error").or(predicate::str::contains("connect")));
+        .stderr(
+            predicate::str::contains("Network/transport error")
+                .or(predicate::str::contains("connect")),
+        );
 }
