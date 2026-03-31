@@ -2,6 +2,7 @@ use crate::runtime::executor::ContractExecutor;
 use crate::utils::wasm::{parse_function_signatures, ContractFunctionSignature};
 use crate::{DebuggerError, Result};
 use serde::Serialize;
+use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Write;
 use std::time::Instant;
@@ -132,6 +133,37 @@ fn seeded_shuffle(items: &mut [String], seed: u64) {
     }
 }
 
+fn panic_payload_to_string(payload: Box<dyn Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+fn execute_with_panic_guard(
+    executor: &mut ContractExecutor,
+    function: &str,
+    args_json: &str,
+    trace: &mut Vec<crate::server::protocol::DynamicTraceEvent>,
+) -> Result<String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        executor.execute(function, Some(args_json))
+    })) {
+        Ok(res) => {
+            *trace = executor.get_dynamic_trace().unwrap_or_default();
+            res
+        }
+        Err(payload) => Err(DebuggerError::ExecutionError(format!(
+            "Contract execution panicked: {}",
+            panic_payload_to_string(payload)
+        ))
+        .into()),
+    }
+}
+
 #[derive(Default)]
 pub struct SymbolicAnalyzer;
 
@@ -245,14 +277,15 @@ impl SymbolicAnalyzer {
                             ))
                             .into())
                         } else {
-                            let res = executor.execute(function, Some(args_json));
-                            trace = executor.get_dynamic_trace().unwrap_or_default();
-                            res
+                            execute_with_panic_guard(
+                                &mut executor,
+                                function,
+                                args_json,
+                                &mut trace,
+                            )
                         }
                     } else {
-                        let res = executor.execute(function, Some(args_json));
-                        trace = executor.get_dynamic_trace().unwrap_or_default();
-                        res
+                        execute_with_panic_guard(&mut executor, function, args_json, &mut trace)
                     }
                 } else {
                     Err(crate::DebuggerError::ExecutionError("Init fail".into()).into())
