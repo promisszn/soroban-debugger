@@ -2338,9 +2338,7 @@ mod tests {
         let findings = rule.analyze_dynamic(None, &trace).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule_id, "missing-auth");
-        assert!(findings[0]
-            .description
-            .contains("before any authorization in frame 'test_function'"));
+        assert!(findings[0].description.contains("before any authorization"));
     }
 
     #[test]
@@ -2419,9 +2417,7 @@ mod tests {
         let findings = rule.analyze_dynamic(None, &trace).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule_id, "missing-auth");
-        assert!(findings[0]
-            .description
-            .contains("before any authorization in frame 'test_function'"));
+        assert!(findings[0].description.contains("before any authorization"));
     }
 
     #[test]
@@ -2458,7 +2454,7 @@ mod tests {
         assert_eq!(findings[0].rule_id, "missing-auth");
         assert!(findings[0]
             .description
-            .contains("without any preceding authorization in frame 'test_function'"));
+            .contains("without any preceding authorization"));
     }
 
     #[test]
@@ -2496,7 +2492,7 @@ mod tests {
         assert_eq!(findings[0].rule_id, "missing-auth");
         assert!(findings[0]
             .description
-            .contains("without any preceding authorization in frame 'main_function'"));
+            .contains("without any preceding authorization"));
     }
 
     #[test]

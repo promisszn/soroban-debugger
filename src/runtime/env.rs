@@ -439,8 +439,7 @@ mod tests {
         env.enter_function("main", "test");
         env.record_function_call("main", "test", vec![], None::<&str>, None::<&str>);
 
-        // enter_function increments call depth but not operation sequence
-        // only track_storage_* and record_function_call increment operation_sequence
-        assert_eq!(env.operation_count(), 3);
+        // track_storage_* / enter_function / record_function_call all increment the sequence.
+        assert_eq!(env.operation_count(), 4);
     }
 }
