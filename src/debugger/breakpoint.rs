@@ -150,6 +150,12 @@ impl BreakpointManager {
         self.remove_breakpoint(function).is_some()
     }
 
+    fn remove_breakpoint(&mut self, function: &str) -> Option<Breakpoint> {
+        let removed = self.breakpoints.remove(function)?;
+        self.breakpoint_ids.remove(&removed.id);
+        Some(removed)
+    }
+
     pub fn remove_function(&mut self, function: &str) -> bool {
         self.remove(function)
     }
@@ -278,28 +284,8 @@ impl BreakpointManager {
         self.breakpoints.len()
     }
 
-    /// Parse a condition string into a Condition object
-    /// Note: This feature is not yet fully implemented
-    #[allow(dead_code)]
-    pub fn parse_condition(s: &str) -> crate::Result<()> {
-        use crate::DebuggerError;
-
-        let trimmed = s.trim();
-        let Some((op, pos)) = find_operator(trimmed) else {
-            return Err(DebuggerError::BreakpointError(
-                "Condition must contain a comparison operator".to_string(),
-            )
-            .into());
-        };
-
-        let lhs = trimmed[..pos].trim();
-        let rhs = trimmed[pos + op.len()..].trim();
-
-        if lhs.is_empty() || rhs.is_empty() {
-            return Err(DebuggerError::BreakpointError(
-                "Condition must include non-empty left and right operands".to_string(),
-    /// Parse a condition string into a validated Condition
-    /// This validates syntax but doesn't evaluate it
+    /// Parse a condition string into a validated condition expression.
+    /// This validates syntax but does not evaluate it.
     pub fn parse_condition(s: &str) -> crate::Result<String> {
         let s = s.trim();
         if s.is_empty() {
@@ -309,7 +295,6 @@ impl BreakpointManager {
             .into());
         }
 
-        // Basic syntax validation - check for supported operators
         if !contains_comparison_operator(s) {
             return Err(crate::DebuggerError::BreakpointError(format!(
                 "Invalid condition '{}': must contain a comparison operator (==, !=, <, >, <=, >=)",
@@ -318,7 +303,21 @@ impl BreakpointManager {
             .into());
         }
 
-        // Additional validation could be added here
+        let Some((op, pos)) = find_operator(s) else {
+            return Err(crate::DebuggerError::BreakpointError(
+                "Condition must contain a comparison operator".to_string(),
+            )
+            .into());
+        };
+        let lhs = s[..pos].trim();
+        let rhs = s[pos + op.len()..].trim();
+        if lhs.is_empty() || rhs.is_empty() {
+            return Err(crate::DebuggerError::BreakpointError(
+                "Condition must include non-empty left and right operands".to_string(),
+            )
+            .into());
+        }
+
         Ok(s.to_string())
     }
 
@@ -332,11 +331,6 @@ impl BreakpointManager {
             .into());
         }
 
-        Err(DebuggerError::BreakpointError(
-            "Conditional breakpoints are not yet implemented".to_string(),
-        )
-        .into())
-        // Validate hit condition format
         if !is_valid_hit_condition(s) {
             return Err(crate::DebuggerError::BreakpointError(format!(
                 "Invalid hit condition '{}': must be number, >N, >=N, ==N, <N, <=N, or %N==0",
@@ -476,6 +470,12 @@ fn evaluate_hit_condition(hit_condition: &str, hit_count: usize) -> crate::Resul
         hit_condition
     ))
     .into())
+}
+
+fn find_operator(s: &str) -> Option<(&'static str, usize)> {
+    [">=", "<=", "==", "!=", ">", "<"]
+        .into_iter()
+        .find_map(|op| s.find(op).map(|pos| (op, pos)))
 }
 
 /// Check if a string contains a comparison operator
