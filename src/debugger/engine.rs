@@ -143,7 +143,6 @@ impl DebuggerEngine {
             instrumenter: Instrumenter::new(),
             source_map: None,
             paused: false,
-            ) -> Result<String> {
             instruction_debug_enabled: false,
         }
     }
