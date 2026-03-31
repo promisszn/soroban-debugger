@@ -746,10 +746,10 @@ fn run_export_storage_performs_single_export() {
     let _: serde_json::Value = serde_json::from_str(&exported_content)
         .expect("Exported storage file does not contain valid JSON");
     
-    // Verify success message with entry count appears once
-    let success_count = combined.matches("Exported").matches("storage entries").count();
+    // Verify success message with entry count appears.
+    let has_success_message = combined.contains("Exported") && combined.contains("storage entries");
     assert!(
-        success_count > 0,
+        has_success_message,
         "Expected success message with 'Exported X storage entries' to appear in output.\nOutput:\n{}",
         combined
     );
