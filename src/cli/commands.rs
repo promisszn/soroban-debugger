@@ -521,6 +521,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
             tls_cert: args.tls_cert,
             tls_key: args.tls_key,
             repeat: args.repeat,
+            storage_filter: args.storage_filter,
             storage_filter: Vec::new(),
         });
     }
@@ -535,7 +536,7 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
                 function: args.function.clone(),
                 tls_cert: args.tls_cert.clone(),
                 tls_key: args.tls_key.clone(),
-                tls_ca: None, // RunArgs doesn't have tls_ca, but RemoteArgs does
+                tls_ca: None, // Default in RunArgs -> RemoteArgs conversion
                 args: args.args.clone(),
                 tls_cert: args.tls_cert.clone(),
                 tls_key: args.tls_key.clone(),

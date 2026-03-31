@@ -283,6 +283,7 @@ fn parity_shared_function_breakpoint_accepted() {
 /// This validates the shared auth handshake that the extension relies on via
 /// the `token` field in launch.json.
 #[test]
+#[cfg(feature = "network-tests")]
 fn parity_dap_server_starts_and_accepts_connection() {
     if !network::can_bind_loopback() {
         eprintln!(
@@ -366,6 +367,7 @@ fn parity_dap_server_starts_and_accepts_connection() {
 /// The server must reject an incorrect token. This confirms the auth layer
 /// that the extension depends on when `token` is set in launch.json.
 #[test]
+#[cfg(feature = "network-tests")]
 fn parity_dap_server_rejects_invalid_token() {
     if !network::can_bind_loopback() {
         eprintln!(
@@ -457,6 +459,7 @@ fn parity_dap_server_rejects_invalid_token() {
 /// Do NOT remove or weaken this test without a corresponding protocol version
 /// bump and a migration note in CONTRIBUTING.md.
 #[test]
+#[cfg(feature = "network-tests")]
 fn parity_dap_auth_before_handshake_is_accepted() {
     if !network::can_bind_loopback() {
         eprintln!(

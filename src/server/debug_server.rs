@@ -194,7 +194,7 @@ impl DebugServer {
 
         let mut heartbeat_interval = None;
         let mut idle_timeout = None;
-        let mut heartbeat_timer = None;
+        let mut _heartbeat_timer = None;
 
         loop {
             let next_message = if let Some(timeout) = idle_timeout {
@@ -279,7 +279,7 @@ impl DebugServer {
                             info!("Negotiated heartbeat interval: {}ms", interval);
                             let tx_heartbeat = tx_out.clone();
                             let interval_ms = interval as u64;
-                            heartbeat_timer = Some(tokio::spawn(async move {
+                            _heartbeat_timer = Some(tokio::spawn(async move {
                                 let mut interval_timer =
                                     tokio::time::interval(std::time::Duration::from_millis(
                                         interval_ms,
@@ -509,60 +509,62 @@ impl DebugServer {
                                         continue;
                                     }
                                 }
+                                Err(e) => DebugResponse::Error { message: e.to_string() },
                             }
+                        } else {
+                            DebugResponse::Error { message: "No contract loaded for repeat execution".to_string() }
                         }
-                    }
-
-                    match self.engine.as_mut() {
-                    Some(engine) if engine.breakpoints().should_break(&function) => {
-                        match current_storage(engine) {
-                            Ok(storage) => match engine.breakpoints_mut().on_hit(
-                                &function,
-                                &storage,
-                                args.as_deref(),
-                            ) {
-                                Ok(Some(hit)) => {
-                                    for message in hit.log_messages {
-                                        println!("{message}");
+                    } else {
+                        match self.engine.as_mut() {
+                            Some(engine) => {
+                                if engine.breakpoints().should_break(&function) {
+                                    match current_storage(engine) {
+                                        Ok(storage) => match engine.breakpoints_mut().on_hit(
+                                            &function,
+                                            &storage,
+                                            args.as_deref(),
+                                        ) {
+                                            Ok(Some(hit)) => {
+                                                for message in hit.log_messages {
+                                                    println!("{message}");
+                                                }
+                                                if hit.should_pause {
+                                                    engine.prepare_breakpoint_stop(&function, args.as_deref());
+                                                    self.pending_execution = Some(PendingExecution { function: function.clone(), args: args.clone() });
+                                                    DebugResponse::ExecutionResult {
+                                                        success: true,
+                                                        output: "Paused at function breakpoint".to_string(),
+                                                        error: None,
+                                                        paused: true,
+                                                        completed: false,
+                                                        source_location: engine.current_source_location().map(Into::into),
+                                                    }
+                                                } else {
+                                                    is_executing.store(true, std::sync::atomic::Ordering::SeqCst);
+                                                    let resp = execute_without_breakpoints(engine, &function, args);
+                                                    is_executing.store(false, std::sync::atomic::Ordering::SeqCst);
+                                                    resp
+                                                }
+                                            }
+                                            Ok(None) => {
+                                                is_executing.store(true, std::sync::atomic::Ordering::SeqCst);
+                                                let resp = execute_without_breakpoints(engine, &function, args);
+                                                is_executing.store(false, std::sync::atomic::Ordering::SeqCst);
+                                                resp
+                                            }
+                                            Err(e) => DebugResponse::Error { message: e.to_string() },
+                                        },
+                                        Err(e) => DebugResponse::Error { message: e.to_string() },
                                     }
-
-                                    if hit.should_pause {
-                                        engine.prepare_breakpoint_stop(&function, args.as_deref());
-                                        self.pending_execution =
-                                            Some(PendingExecution { function, args });
-                                        DebugResponse::ExecutionResult {
-                                            success: true,
-                                            output: String::new(),
-                                            error: None,
-                                            paused: true,
-                                            completed: false,
-                                            source_location: None,
-                                        }
-                                    } else {
-                                        {
-                                            is_executing
-                                                .store(true, std::sync::atomic::Ordering::SeqCst);
-                                            let r = execute_without_breakpoints(
-                                                engine, &function, args,
-                                            );
-                                            is_executing
-                                                .store(false, std::sync::atomic::Ordering::SeqCst);
-                                            r
-                                        }
-                                    }
-                                }
-                                Ok(None) => {
+                                } else {
                                     is_executing.store(true, std::sync::atomic::Ordering::SeqCst);
-                                    let r = execute_without_breakpoints(engine, &function, args);
+                                    let resp = execute_without_breakpoints(engine, &function, args);
                                     is_executing.store(false, std::sync::atomic::Ordering::SeqCst);
-                                    r
+                                    resp
                                 }
-                                Err(e) => DebugResponse::Error {
-                                    message: e.to_string(),
-                                },
-                            },
-                            Err(e) => DebugResponse::Error {
-                                message: e.to_string(),
+                            }
+                            None => DebugResponse::Error {
+                                message: "No contract engine initialized".to_string(),
                             },
                         }
                     }
@@ -594,7 +596,7 @@ impl DebugServer {
                                 paused: engine.is_paused(),
                                 current_function,
                                 step_count,
-                                source_location: None,
+                                source_location: engine.current_source_location().map(Into::into),
                             }
                         }
                         Err(e) => DebugResponse::Error {
@@ -622,7 +624,7 @@ impl DebugServer {
                                 paused: engine.is_paused(),
                                 current_function,
                                 step_count,
-                                source_location: None,
+                                source_location: engine.current_source_location().map(Into::into),
                             }
                         }
                         Err(e) => DebugResponse::Error {
@@ -662,7 +664,7 @@ impl DebugServer {
                                     paused: false,
                                     current_function,
                                     step_count,
-                                    source_location: None,
+                                    source_location: engine.current_source_location().map(Into::into),
                                 },
                                 Err(e) => DebugResponse::Error {
                                     message: e.to_string(),
@@ -685,7 +687,7 @@ impl DebugServer {
                                         paused: engine.is_paused(),
                                         current_function,
                                         step_count,
-                                        source_location: None,
+                                        source_location: engine.current_source_location().map(Into::into),
                                     }
                                 }
                                 Err(e) => DebugResponse::Error {
@@ -736,14 +738,14 @@ impl DebugServer {
                                     output: Some(output),
                                     error: None,
                                     paused: false,
-                                    source_location: None,
+                                    source_location: engine.current_source_location().map(Into::into),
                                 },
                                 Err(e) => DebugResponse::ContinueResult {
                                     completed: false,
                                     output: None,
                                     error: Some(e.to_string()),
                                     paused: false,
-                                    source_location: None,
+                                    source_location: engine.current_source_location().map(Into::into),
                                 },
                             }
                         } else {
@@ -753,14 +755,14 @@ impl DebugServer {
                                     output: None,
                                     error: None,
                                     paused: engine.is_paused(),
-                                    source_location: None,
+                                    source_location: engine.current_source_location().map(Into::into),
                                 },
                                 Err(e) => DebugResponse::ContinueResult {
                                     completed: false,
                                     output: None,
                                     error: Some(e.to_string()),
                                     paused: engine.is_paused(),
-                                    source_location: None,
+                                    source_location: engine.current_source_location().map(Into::into),
                                 },
                             }
                         }
@@ -791,7 +793,7 @@ impl DebugServer {
                                 step_count: state.step_count() as u64,
                                 paused: engine.is_paused(),
                                 call_stack,
-                                source_location: None,
+                                source_location: engine.current_source_location().map(Into::into),
                             }
                         }
                         Err(e) => DebugResponse::Error {
@@ -1086,7 +1088,7 @@ fn execute_without_breakpoints(
             error: None,
             paused: engine.is_paused(),
             completed: true,
-            source_location: None,
+            source_location: engine.current_source_location().map(Into::into),
         },
         Err(e) => DebugResponse::ExecutionResult {
             success: false,
@@ -1094,7 +1096,7 @@ fn execute_without_breakpoints(
             error: Some(e.to_string()),
             paused: false,
             completed: true,
-            source_location: None,
+            source_location: engine.current_source_location().map(Into::into),
         },
     }
 }
@@ -1144,11 +1146,6 @@ fn summarize_request(request: &DebugRequest) -> String {
 }
 
 async fn setup_signal_handlers(shutdown: Arc<Notify>) {
-    #[cfg(unix)]
-    let mut ctrl_c = Box::pin(tokio::signal::ctrl_c());
-
-    #[cfg(not(unix))]
-    let ctrl_c = tokio::signal::ctrl_c();
     let mut ctrl_c = Box::pin(tokio::signal::ctrl_c());
 
     #[cfg(unix)]
