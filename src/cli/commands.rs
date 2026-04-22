@@ -537,6 +537,13 @@ pub fn run(args: RunArgs, verbosity: Verbosity) -> Result<()> {
                 tls_key: args.tls_key.clone(),
                 tls_ca: None,
                 args: args.args.clone(),
+                connect_timeout_ms: 10000,
+                timeout_ms: 30000,
+                inspect_timeout_ms: None,
+                storage_timeout_ms: None,
+                retry_attempts: 3,
+                retry_base_delay_ms: 200,
+                retry_max_delay_ms: 2000,
                 action: None,
             },
             verbosity,
@@ -1838,14 +1845,43 @@ pub fn server(args: ServerArgs) -> Result<()> {
 /// Connect to remote debug server
 pub fn remote(args: RemoteArgs, _verbosity: Verbosity) -> Result<()> {
     print_info(format!("Connecting to remote debugger at {}", args.remote));
+
+    // Build per-request timeouts, falling back to the general --timeout-ms for
+    // the specialised classes when the user did not set them explicitly.
+    let default_ms = args.timeout_ms;
+    let timeouts = crate::client::RemoteClientConfig::build_timeouts(
+        default_ms,
+        args.inspect_timeout_ms,
+        args.storage_timeout_ms,
+    );
+
     let config = crate::client::RemoteClientConfig {
+        connect_timeout: std::time::Duration::from_millis(args.connect_timeout_ms),
+        timeouts,
+        retry: crate::client::RetryPolicy {
+            max_attempts: args.retry_attempts,
+            base_delay: std::time::Duration::from_millis(args.retry_base_delay_ms),
+            max_delay: std::time::Duration::from_millis(args.retry_max_delay_ms),
+        },
         tls_cert: args.tls_cert.clone(),
         tls_key: args.tls_key.clone(),
         tls_ca: args.tls_ca.clone(),
         ..Default::default()
     };
+
     let mut client =
-        crate::client::RemoteClient::connect_with_config(&args.remote, args.token.clone(), config)?;
+        crate::client::RemoteClient::connect_with_config(&args.remote, args.token.clone(), config).map_err(|e| {
+            // Enrich connect-specific errors with a hint about --connect-timeout-ms so
+            // the user knows which knob to turn without having to read the docs first.
+            let msg = e.to_string();
+            if msg.contains("Request timed out") || msg.contains("timed out") || msg.contains("Connection refused") || msg.contains("Network/transport error") {
+                miette::miette!("{}\n\nHint: use --connect-timeout-ms <MS> (current: {}ms) to extend the initial TCP connect window, or set SOROBAN_DEBUG_CONNECT_TIMEOUT_MS. See docs/remote-troubleshooting.md for the full diagnostic matrix.",
+                    msg,
+                    args.connect_timeout_ms)
+            } else {
+                miette::miette!("{}", msg)
+            }
+        })?;
 
     if let Some(contract) = &args.contract {
         print_info(format!("Loading contract: {:?}", contract));

@@ -1106,6 +1106,55 @@ pub struct RemoteArgs {
     #[arg(short, long)]
     pub args: Option<String>,
 
+    /// Timeout in milliseconds for the initial TCP connection to the remote server.
+    ///
+    /// Use this when the server is on a slow or restricted network and the default
+    /// connect attempt feels hung or fails unpredictably.  Distinct from
+    /// --timeout-ms, which governs individual request/response round-trips after
+    /// the connection is already established.
+    ///
+    /// Default: 10 000 ms (10 seconds).
+    #[arg(long, value_name = "MS", default_value = "10000", env = "SOROBAN_DEBUG_CONNECT_TIMEOUT_MS")]
+    pub connect_timeout_ms: u64,
+
+    /// Per-request timeout in milliseconds for regular operations (execute, storage, inspect).
+    ///
+    /// Default: 30 000 ms (30 seconds).
+    #[arg(long, value_name = "MS", default_value = "30000", env = "SOROBAN_DEBUG_REQUEST_TIMEOUT_MS")]
+    pub timeout_ms: u64,
+
+    /// Per-request timeout in milliseconds specifically for Inspect calls.
+    ///
+    /// Inspect fetches execution state metadata and can be slower than a simple ping.
+    /// Defaults to --timeout-ms when not provided.
+    #[arg(long, value_name = "MS", env = "SOROBAN_DEBUG_INSPECT_TIMEOUT_MS")]
+    pub inspect_timeout_ms: Option<u64>,
+
+    /// Per-request timeout in milliseconds specifically for GetStorage calls.
+    ///
+    /// Storage fetches can be large; set this higher than --timeout-ms for contracts
+    /// with many storage keys.  Defaults to --timeout-ms when not provided.
+    #[arg(long, value_name = "MS", env = "SOROBAN_DEBUG_STORAGE_TIMEOUT_MS")]
+    pub storage_timeout_ms: Option<u64>,
+
+    /// Maximum number of retry attempts for idempotent requests (ping, inspect, storage).
+    ///
+    /// Default: 3.
+    #[arg(long, value_name = "N", default_value = "3")]
+    pub retry_attempts: usize,
+
+    /// Base delay in milliseconds between retry attempts (exponential back-off).
+    ///
+    /// Default: 200 ms.
+    #[arg(long, value_name = "MS", default_value = "200")]
+    pub retry_base_delay_ms: u64,
+
+    /// Maximum delay in milliseconds between retry attempts.
+    ///
+    /// Default: 2 000 ms.
+    #[arg(long, value_name = "MS", default_value = "2000")]
+    pub retry_max_delay_ms: u64,
+
     /// Remote operation to perform (default: execute or ping)
     #[command(subcommand)]
     pub action: Option<RemoteAction>,
