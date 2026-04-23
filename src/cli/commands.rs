@@ -2945,6 +2945,6 @@ mod tests {
         assert!(json.get("protocol").is_some());
         assert!(json.get("vscode_extension").is_some());
     }
-}/
+}
 
 
