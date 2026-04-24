@@ -186,6 +186,9 @@ impl DebuggerUI {
             "budget" => {
                 BudgetInspector::display(self.engine.executor().host());
             }
+            "diag" | "diagnostics" => {
+                self.display_diagnostics();
+            }
             "break" => {
                 if parts.len() < 2 {
                     tracing::warn!("breakpoint set without function name");
@@ -254,6 +257,12 @@ impl DebuggerUI {
                 format!("Paused: {}", self.engine.is_paused()),
                 crate::logging::LogLevel::Info,
             );
+            if let Some(reason) = self.engine.pause_reason_label() {
+                crate::logging::log_display(
+                    format!("Pause reason: {}", reason),
+                    crate::logging::LogLevel::Info,
+                );
+            }
             if let Some(output) = &self.last_output {
                 crate::logging::log_display(
                     format!("Last result: {}", output),
@@ -342,93 +351,35 @@ impl DebuggerUI {
         Ok(())
     }
 
-    fn parse_storage_display_options(parts: &[&str]) -> Result<StorageDisplayOptions> {
-        let mut options = StorageDisplayOptions::default();
-        let mut index = 0;
+    fn display_diagnostics(&self) {
+        let budget = BudgetInspector::get_cpu_usage(self.engine.executor().host());
+        let diagnostics = crate::output::collect_runtime_diagnostics(
+            self.engine.source_map().is_some(),
+            &budget,
+            self.last_error(),
+        );
 
-        while index < parts.len() {
-            match parts[index] {
-                "--page" => {
-                    index += 1;
-                    let value = parts.get(index).ok_or_else(|| {
-                        crate::DebuggerError::InvalidArguments(
-                            "storage --page requires a number".to_string(),
-                        )
-                    })?;
-                    options.page = value.parse::<usize>().map_err(|_| {
-                        crate::DebuggerError::InvalidArguments(format!(
-                            "invalid storage page '{}'",
-                            value
-                        ))
-                    })?;
-                    if options.page == 0 {
-                        return Err(crate::DebuggerError::InvalidArguments(
-                            "storage --page must be at least 1".to_string(),
-                        )
-                        .into());
-                    }
-                }
-                "--page-size" => {
-                    index += 1;
-                    let value = parts.get(index).ok_or_else(|| {
-                        crate::DebuggerError::InvalidArguments(
-                            "storage --page-size requires a number".to_string(),
-                        )
-                    })?;
-                    options.page_size = value.parse::<usize>().map_err(|_| {
-                        crate::DebuggerError::InvalidArguments(format!(
-                            "invalid storage page size '{}'",
-                            value
-                        ))
-                    })?;
-                    if options.page_size == 0 {
-                        return Err(crate::DebuggerError::InvalidArguments(
-                            "storage --page-size must be at least 1".to_string(),
-                        )
-                        .into());
-                    }
-                }
-                "--jump" => {
-                    index += 1;
-                    let value = parts.get(index).ok_or_else(|| {
-                        crate::DebuggerError::InvalidArguments(
-                            "storage --jump requires a key or prefix".to_string(),
-                        )
-                    })?;
-                    options.jump_to = Some((*value).to_string());
-                }
-                "--filter" => {
-                    index += 1;
-                    let value = parts.get(index).ok_or_else(|| {
-                        crate::DebuggerError::InvalidArguments(
-                            "storage --filter requires a query".to_string(),
-                        )
-                    })?;
-                    options.filter = Some((*value).to_string());
-                }
-                other if other.starts_with("--") => {
-                    return Err(crate::DebuggerError::InvalidArguments(format!(
-                        "unknown storage option '{}'",
-                        other
-                    ))
-                    .into());
-                }
-                other => {
-                    if options.filter.is_some() {
-                        return Err(crate::DebuggerError::InvalidArguments(format!(
-                            "unexpected extra storage argument '{}'",
-                            other
-                        ))
-                        .into());
-                    }
-                    options.filter = Some(other.to_string());
-                }
-            }
-
-            index += 1;
+        if diagnostics.is_empty() {
+            crate::logging::log_display("No active diagnostics", crate::logging::LogLevel::Info);
+            return;
         }
 
-        Ok(options)
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=== Diagnostics ===", crate::logging::LogLevel::Info);
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+
+        for diagnostic in diagnostics {
+            crate::logging::log_display(
+                diagnostic.display_line(),
+                match diagnostic.severity {
+                    crate::output::DiagnosticSeverity::Notice => crate::logging::LogLevel::Info,
+                    crate::output::DiagnosticSeverity::Warning => crate::logging::LogLevel::Warn,
+                    crate::output::DiagnosticSeverity::Error => crate::logging::LogLevel::Error,
+                },
+            );
+        }
+
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
     }
 
     fn print_help(&self) {
@@ -465,6 +416,10 @@ impl DebuggerUI {
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
+            "  diagnostics | diag Show active diagnostics",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
             "  break <func> [cond] Set breakpoint with optional condition",
             crate::logging::LogLevel::Info,
         );
@@ -486,3 +441,5 @@ impl DebuggerUI {
         );
     }
 }
+
+/////////////////

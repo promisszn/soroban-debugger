@@ -31,7 +31,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     io,
     time::{Duration, Instant},
 };
@@ -60,6 +60,7 @@ pub enum ActivePane {
     Storage,
     Budget,
     Log,
+    Diagnostics,
 }
 
 impl ActivePane {
@@ -69,17 +70,19 @@ impl ActivePane {
             ActivePane::CallStack => ActivePane::Storage,
             ActivePane::Storage => ActivePane::Budget,
             ActivePane::Budget => ActivePane::Log,
-            ActivePane::Log => ActivePane::Execution,
+            ActivePane::Log => ActivePane::Diagnostics,
+            ActivePane::Diagnostics => ActivePane::Execution,
         }
     }
 
     fn prev(self) -> Self {
         match self {
-            ActivePane::Execution => ActivePane::Log,
+            ActivePane::Execution => ActivePane::Diagnostics,
             ActivePane::CallStack => ActivePane::Execution,
             ActivePane::Storage => ActivePane::CallStack,
             ActivePane::Budget => ActivePane::Storage,
             ActivePane::Log => ActivePane::Budget,
+            ActivePane::Diagnostics => ActivePane::Log,
         }
     }
 
@@ -90,6 +93,7 @@ impl ActivePane {
             ActivePane::Storage => "Storage",
             ActivePane::Budget => "Budget Meters",
             ActivePane::Log => "Execution Log",
+            ActivePane::Diagnostics => "Diagnostics",
         }
     }
 }
@@ -133,6 +137,11 @@ pub struct DashboardApp {
     log_entries: Vec<LogEntry>,
     log_scroll: usize,
     log_scroll_state: ScrollbarState,
+
+    // Diagnostics pane
+    diagnostics: Vec<crate::output::DiagnosticRecord>,
+    diagnostics_state: ListState,
+    diagnostics_scroll_state: ScrollbarState,
 
     // Misc
     last_refresh: Instant,
@@ -220,6 +229,13 @@ impl DashboardApp {
             log_entries: Vec::new(),
             log_scroll: 0,
             log_scroll_state: ScrollbarState::default().content_length(0),
+            diagnostics: Vec::new(),
+            diagnostics_state: {
+                let mut state = ListState::default();
+                state.select(Some(0));
+                state
+            },
+            diagnostics_scroll_state: ScrollbarState::default().content_length(0),
             last_refresh: Instant::now(),
             step_count: 0,
             function_name,
@@ -326,185 +342,65 @@ impl DashboardApp {
         self.clamp_storage_selection();
         self.sync_storage_scroll_state();
 
+        self.rebuild_diagnostics();
         self.last_refresh = Instant::now();
     }
 
-    fn storage_query(&self) -> StorageQuery {
-        StorageQuery {
-            filter: if self.storage_filter.trim().is_empty() {
-                None
-            } else {
-                Some(self.storage_filter.clone())
-            },
-            jump_to: None,
-            page: self.storage_current_page(),
-            page_size: self.storage_page_size.max(1),
-        }
-    }
+    fn rebuild_diagnostics(&mut self) {
+        let mut diagnostics = crate::output::collect_runtime_diagnostics(
+            self.engine.source_map().is_some(),
+            &self.budget_info,
+            self.last_error.as_deref(),
+        );
 
-    fn storage_filtered_len(&self) -> usize {
-        StorageInspector::build_page(&self.storage_entries, &self.storage_query()).filtered_entries
-    }
-
-    fn storage_current_page(&self) -> usize {
-        self.storage_selected / self.storage_page_size.max(1)
-    }
-
-    fn set_storage_page_size(&mut self, page_size: usize) {
-        let page_size = page_size.max(1);
-        if self.storage_page_size != page_size {
-            self.storage_page_size = page_size;
-            self.clamp_storage_selection();
-            self.sync_storage_scroll_state();
-        }
-    }
-
-    fn clamp_storage_selection(&mut self) {
-        let filtered_len = self.storage_filtered_len();
-        if filtered_len == 0 {
-            self.storage_selected = 0;
-            self.storage_state.select(None);
-            return;
-        }
-
-        if self.storage_selected >= filtered_len {
-            self.storage_selected = filtered_len - 1;
-        }
-
-        let page_size = self.storage_page_size.max(1);
-        let page_start = (self.storage_selected / page_size) * page_size;
-        self.storage_state
-            .select(Some(self.storage_selected.saturating_sub(page_start)));
-    }
-
-    fn sync_storage_scroll_state(&mut self) {
-        let filtered_len = self.storage_filtered_len();
-        self.storage_scroll_state = self
-            .storage_scroll_state
-            .content_length(filtered_len.max(1))
-            .position(self.storage_selected.min(filtered_len.saturating_sub(1)));
-    }
-
-    fn storage_page(&self) -> crate::inspector::storage::StoragePage {
-        StorageInspector::build_page(&self.storage_entries, &self.storage_query())
-    }
-
-    fn move_storage_selection(&mut self, delta: isize) {
-        let filtered_len = self.storage_filtered_len();
-        if filtered_len == 0 {
-            self.storage_state.select(None);
-            return;
-        }
-
-        let max_index = filtered_len.saturating_sub(1) as isize;
-        let next = (self.storage_selected as isize + delta).clamp(0, max_index) as usize;
-        self.storage_selected = next;
-        self.clamp_storage_selection();
-        self.sync_storage_scroll_state();
-    }
-
-    fn move_storage_page(&mut self, delta_pages: isize) {
-        let step = self.storage_page_size.max(1) as isize;
-        self.move_storage_selection(delta_pages * step);
-    }
-
-    fn move_storage_to_boundary(&mut self, to_end: bool) {
-        let filtered_len = self.storage_filtered_len();
-        if filtered_len == 0 {
-            self.storage_state.select(None);
-            return;
-        }
-
-        self.storage_selected = if to_end { filtered_len - 1 } else { 0 };
-        self.clamp_storage_selection();
-        self.sync_storage_scroll_state();
-    }
-
-    fn apply_storage_filter(&mut self, filter: String) {
-        self.storage_filter = filter.trim().to_string();
-        self.storage_selected = 0;
-        self.clamp_storage_selection();
-        self.sync_storage_scroll_state();
-        if self.storage_filter.is_empty() {
-            self.status_message = Some(("Storage filter cleared".to_string(), StatusKind::Info));
-        } else {
-            self.status_message = Some((
-                format!("Storage filter: {}", self.storage_filter),
-                StatusKind::Info,
+        for entry in self
+            .log_entries
+            .iter()
+            .filter(|entry| matches!(entry.level, LogLevel::Warn | LogLevel::Error))
+            .rev()
+            .take(8)
+            .rev()
+        {
+            let severity = match entry.level {
+                LogLevel::Warn => crate::output::DiagnosticSeverity::Warning,
+                LogLevel::Error => crate::output::DiagnosticSeverity::Error,
+                _ => continue,
+            };
+            diagnostics.push(crate::output::DiagnosticRecord::new(
+                "log",
+                entry.message.clone(),
+                Some(format!("Logged at {}", entry.timestamp)),
+                severity,
             ));
         }
-    }
 
-    fn jump_to_storage_key(&mut self, jump: String) {
-        let jump = jump.trim().to_string();
-        if jump.is_empty() {
-            self.status_message = Some(("Storage jump cancelled".to_string(), StatusKind::Info));
-            return;
-        }
+        let mut seen = HashSet::new();
+        diagnostics.retain(|diagnostic| {
+            seen.insert(format!(
+                "{}|{}|{}",
+                diagnostic.source,
+                diagnostic.summary,
+                diagnostic.severity.label()
+            ))
+        });
 
-        let query = self.storage_query();
-        let filtered_entries =
-            StorageInspector::filter_entries(&self.storage_entries, query.normalized_filter());
-        match StorageInspector::find_jump_index(&filtered_entries, &jump) {
-            Some(index) => {
-                self.storage_selected = index;
-                self.clamp_storage_selection();
-                self.sync_storage_scroll_state();
-                self.status_message = Some((
-                    format!("Jumped to storage key match: {}", jump),
-                    StatusKind::Info,
-                ));
-            }
-            None => {
-                self.status_message = Some((
-                    format!("No storage key matched '{}'", jump),
-                    StatusKind::Error,
-                ));
-            }
-        }
-    }
-
-    fn open_storage_input(&mut self, mode: StorageInputMode) {
-        self.storage_input_mode = Some(mode);
-        self.storage_input_value = match mode {
-            StorageInputMode::Filter => self.storage_filter.clone(),
-            StorageInputMode::Jump => String::new(),
+        self.diagnostics = diagnostics;
+        let len = self.diagnostics.len();
+        let selected = if len == 0 {
+            None
+        } else {
+            Some(
+                self.diagnostics_state
+                    .selected()
+                    .unwrap_or(0)
+                    .min(len.saturating_sub(1)),
+            )
         };
-    }
-
-    fn clear_storage_filter(&mut self) {
-        self.apply_storage_filter(String::new());
-    }
-
-    fn handle_storage_input_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        let Some(mode) = self.storage_input_mode else {
-            return false;
-        };
-
-        match key.code {
-            KeyCode::Esc => {
-                self.storage_input_mode = None;
-                self.storage_input_value.clear();
-            }
-            KeyCode::Enter => {
-                let value = self.storage_input_value.clone();
-                self.storage_input_mode = None;
-                self.storage_input_value.clear();
-                match mode {
-                    StorageInputMode::Filter => self.apply_storage_filter(value),
-                    StorageInputMode::Jump => self.jump_to_storage_key(value),
-                }
-            }
-            KeyCode::Backspace => {
-                self.storage_input_value.pop();
-            }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.storage_input_value.push(c);
-            }
-            _ => {}
-        }
-
-        true
+        self.diagnostics_state.select(selected);
+        self.diagnostics_scroll_state = self
+            .diagnostics_scroll_state
+            .content_length(len)
+            .position(selected.unwrap_or(0));
     }
 
     // ── Step action ──────────────────────────────────────────────────────────
@@ -585,6 +481,16 @@ impl DashboardApp {
                 self.log_scroll_state = self.log_scroll_state.position(self.log_scroll);
             }
             ActivePane::Budget => {}
+            ActivePane::Diagnostics => {
+                let len = self.diagnostics.len();
+                if len == 0 {
+                    return;
+                }
+                let sel = self.diagnostics_state.selected().unwrap_or(0);
+                let new_sel = (sel + 1).min(len - 1);
+                self.diagnostics_state.select(Some(new_sel));
+                self.diagnostics_scroll_state = self.diagnostics_scroll_state.position(new_sel);
+            }
         }
     }
 
@@ -603,6 +509,12 @@ impl DashboardApp {
                 self.log_scroll_state = self.log_scroll_state.position(self.log_scroll);
             }
             ActivePane::Budget => {}
+            ActivePane::Diagnostics => {
+                let sel = self.diagnostics_state.selected().unwrap_or(0);
+                let new_sel = sel.saturating_sub(1);
+                self.diagnostics_state.select(Some(new_sel));
+                self.diagnostics_scroll_state = self.diagnostics_scroll_state.position(new_sel);
+            }
         }
     }
 }
@@ -728,6 +640,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     KeyCode::Char('3') => app.active_pane = ActivePane::Storage,
                     KeyCode::Char('4') => app.active_pane = ActivePane::Budget,
                     KeyCode::Char('5') => app.active_pane = ActivePane::Log,
+                    KeyCode::Char('6') => app.active_pane = ActivePane::Diagnostics,
 
                     // ── Scroll ────────────────────────────────────
                     KeyCode::Down | KeyCode::Char('j') => {
@@ -878,32 +791,67 @@ fn render_header(f: &mut Frame, app: &DashboardApp, area: Rect) {
 
 // ─── Body (4 panes) ─────────────────────────────────────────────────────
 fn render_body(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
-    // Split body into left column (top=call stack, bottom=budget) and right column
-    // (top=execution, middle=storage, bottom=log)
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .split(area);
+    if area.width >= 150 {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(28),
+                Constraint::Percentage(47),
+                Constraint::Percentage(25),
+            ])
+            .split(area);
 
-    let left_column = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(columns[0]);
+        let left_column = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(columns[0]);
 
-    let right_column = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(7),
-            Constraint::Percentage(45),
-            Constraint::Percentage(55),
-        ])
-        .split(columns[1]);
+        let center_column = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(7),
+                Constraint::Percentage(45),
+                Constraint::Percentage(55),
+            ])
+            .split(columns[1]);
 
-    render_call_stack(f, app, left_column[0]);
-    render_budget(f, app, left_column[1]);
-    render_execution(f, app, right_column[0]);
-    render_storage(f, app, right_column[1]);
-    render_log(f, app, right_column[2]);
+        render_call_stack(f, app, left_column[0]);
+        render_budget(f, app, left_column[1]);
+        render_execution(f, app, center_column[0]);
+        render_storage(f, app, center_column[1]);
+        render_log(f, app, center_column[2]);
+        render_diagnostics(f, app, columns[2]);
+    } else {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+            .split(area);
+
+        let left_column = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(38),
+                Constraint::Percentage(27),
+                Constraint::Percentage(35),
+            ])
+            .split(columns[0]);
+
+        let right_column = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(7),
+                Constraint::Percentage(45),
+                Constraint::Percentage(55),
+            ])
+            .split(columns[1]);
+
+        render_call_stack(f, app, left_column[0]);
+        render_budget(f, app, left_column[1]);
+        render_diagnostics(f, app, left_column[2]);
+        render_execution(f, app, right_column[0]);
+        render_storage(f, app, right_column[1]);
+        render_log(f, app, right_column[2]);
+    }
 }
 
 // ─── Call Stack pane ──────────────────────────────────────────────────────
@@ -964,6 +912,12 @@ fn render_execution(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
 
     // Show paused file/line if available
     if paused {
+        if let Some(reason) = app.engine.pause_reason_label() {
+            lines.push(Line::from(vec![
+                Span::styled("Pause reason: ", Style::default().fg(COLOR_TEXT_DIM)),
+                Span::styled(reason, Style::default().fg(COLOR_YELLOW)),
+            ]));
+        }
         if let Some(loc) = app.engine.current_source_location() {
             let file = loc.file.display();
             let line = loc.line;
@@ -1472,6 +1426,103 @@ fn render_log(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
 }
 
 // ─── Status bar ───────────────────────────────────────────────────────────
+fn render_diagnostics(f: &mut Frame, app: &mut DashboardApp, area: Rect) {
+    let is_active = app.active_pane == ActivePane::Diagnostics;
+    let title = format!("  Diagnostics  ({} active)", app.diagnostics.len());
+    let block = pane_block(&title, "6", is_active);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if app.diagnostics.is_empty() {
+        let msg = Paragraph::new(vec![
+            Line::from(Span::styled(
+                "  No active diagnostics.",
+                Style::default().fg(COLOR_GREEN),
+            )),
+            Line::from(Span::styled(
+                "  Warnings and notices will appear here.",
+                Style::default().fg(COLOR_TEXT_DIM),
+            )),
+        ])
+        .wrap(Wrap { trim: false });
+        f.render_widget(msg, inner);
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let severity_color = match diagnostic.severity {
+                crate::output::DiagnosticSeverity::Notice => COLOR_ACCENT,
+                crate::output::DiagnosticSeverity::Warning => COLOR_YELLOW,
+                crate::output::DiagnosticSeverity::Error => COLOR_RED,
+            };
+
+            let mut lines = vec![
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {} ", diagnostic.severity.label()),
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(severity_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        diagnostic.source.to_uppercase(),
+                        Style::default()
+                            .fg(COLOR_TEXT_DIM)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(Span::styled(
+                    format!(" {}", diagnostic.summary),
+                    Style::default().fg(COLOR_TEXT),
+                )),
+            ];
+
+            if let Some(detail) = &diagnostic.detail {
+                lines.push(Line::from(Span::styled(
+                    format!(" {}", detail),
+                    Style::default().fg(COLOR_TEXT_DIM),
+                )));
+            }
+
+            ListItem::new(lines)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(
+            Style::default()
+                .bg(Color::Rgb(45, 50, 72))
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("â–¶ ");
+
+    let scroll_area = Rect {
+        x: inner.x + inner.width.saturating_sub(1),
+        y: inner.y,
+        width: 1,
+        height: inner.height,
+    };
+    let list_area = Rect {
+        width: inner.width.saturating_sub(1),
+        ..inner
+    };
+
+    f.render_stateful_widget(list, list_area, &mut app.diagnostics_state);
+    f.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("â†‘"))
+            .end_symbol(Some("â†“"))
+            .style(Style::default().fg(COLOR_BORDER)),
+        scroll_area,
+        &mut app.diagnostics_scroll_state,
+    );
+}
+
 fn render_status_bar(f: &mut Frame, app: &DashboardApp, area: Rect) {
     let active_label = app.active_pane.label();
     let (msg, msg_color) = if let Some((ref s, kind)) = app.status_message {

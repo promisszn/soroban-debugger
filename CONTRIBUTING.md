@@ -17,9 +17,11 @@ Thank you for your interest in contributing to the **Soroban Debugger** project!
 9. [Issue Guidelines](#issue-guidelines)
 10. [Areas for Contribution](#areas-for-contribution)
 11. [Project Structure](#project-structure)
-12. [Code of Conduct](#code-of-conduct)
-13. [Communication](#communication)
-14. [Release Process](#release-process)
+12. [Adding or Changing Commands](#adding-or-changing-commands)
+13. [Updating Man Pages](#updating-man-pages)
+14. [Code of Conduct](#code-of-conduct)
+15. [Communication](#communication)
+16. [Release Process](#release-process)
 
 ---
 
@@ -378,6 +380,14 @@ If you have ideas outside these areas, feel free to discuss them by opening an i
 - `src/utils/` — Utility functions
 - `tests/` — Integration tests
 - `examples/` — Example usage
+
+---
+
+## Adding or Changing Commands
+
+Soroban Debugger exposes features across the CLI, interactive REPL, and the VS Code extension. A single feature often spans CLI arguments, command handlers, documentation, man pages, and the extension's `launch.json` schema.
+
+If you are adding or modifying a command or flag, please review the **Contributor Command Map** to ensure all relevant surfaces are updated before opening your pull request.
 
 ---
 

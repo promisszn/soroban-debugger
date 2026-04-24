@@ -44,6 +44,11 @@
         "command": "soroban-debugger.openDocs",
         "title": "Quick-Open Documentation",
         "category": "Soroban"
+      },
+      {
+        "command": "soroban-debugger.importTrace",
+        "title": "Import Execution Trace",
+        "category": "Soroban"
       }
     ],
     "viewsContainers": {
@@ -60,6 +65,11 @@
         {
           "id": "soroban-debugger.eventsView",
           "name": "Contract Events",
+          "contextualTitle": "Soroban"
+        },
+        {
+          "id": "soroban-debugger.traceView",
+          "name": "Execution Trace",
           "contextualTitle": "Soroban"
         }
       ]
@@ -91,6 +101,11 @@
           "type": "boolean",
           "default": false,
           "description": "Enable opt-in telemetry for launch failures, handshake errors, and adapter crashes. No contract data or secrets are collected."
+        },
+        "soroban-debugger.preflight.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run preflight diagnostics before launching a debug session."
         }
       }
     },
@@ -177,6 +192,27 @@
               "batchArgs": {
                 "type": "string",
                 "description": "Path to a JSON file containing an array of argument sets for batch execution. Each entry is executed as a separate run with its own args."
+              },
+              "showEvents": {
+                "type": "boolean",
+                "description": "Stream contract events to the debug console output channel during execution.",
+                "default": false
+              },
+              "eventFilter": {
+                "type": "array",
+                "description": "Optional event filter patterns. Use plain substring patterns or regex patterns with the prefix 're:'.",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "mock": {
+                "type": "array",
+                "description": "Mock cross-contract return specs in the format CONTRACT_ID.function=return_value.",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
               }
             }
           },
@@ -261,6 +297,27 @@
                 "description": "Repeat execution N times and show throughput/latency stats.",
                 "minimum": 1,
                 "default": 1
+              },
+              "showEvents": {
+                "type": "boolean",
+                "description": "Stream contract events to the debug console output channel during execution.",
+                "default": false
+              },
+              "eventFilter": {
+                "type": "array",
+                "description": "Optional event filter patterns. Use plain substring patterns or regex patterns with the prefix 're:'.",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "mock": {
+                "type": "array",
+                "description": "Mock cross-contract return specs in the format CONTRACT_ID.function=return_value.",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
               }
             }
           }
@@ -275,6 +332,9 @@
             "entrypoint": "main",
             "args": [],
             "trace": false,
+            "showEvents": false,
+            "eventFilter": [],
+            "mock": [],
             "binaryPath": "${workspaceFolder}/target/debug/soroban-debug"
           }
         ],
@@ -291,6 +351,9 @@
               "entrypoint": "main",
               "args": [],
               "trace": false,
+              "showEvents": false,
+              "eventFilter": [],
+              "mock": [],
               "binaryPath": "${workspaceFolder}/target/debug/soroban-debug"
             }
           },
