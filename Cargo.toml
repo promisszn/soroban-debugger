@@ -97,6 +97,7 @@ ed25519-dalek = "2.1"
 libloading = "0.8"
 dirs = "5.0"
 atty = "0.2"
+uuid = { version = "1.0", features = ["v4"] }
 
 is-terminal = "0.4"
 
