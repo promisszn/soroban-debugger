@@ -232,6 +232,9 @@ impl DebuggerUI {
                     tracing::debug!(breakpoint = parts[1], "No breakpoint found at function");
                 }
             }
+            "palette" => {
+                self.show_palette()?;
+            }
             "help" => self.print_help(),
             c if c == kb.quit || c == "quit" || c == "exit" => {
                 tracing::info!("Exiting debugger");
@@ -436,6 +439,10 @@ impl DebuggerUI {
         );
         crate::logging::log_display(
             "  clear <func>       Clear breakpoint",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  palette            Open command palette",
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
