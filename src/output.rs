@@ -18,6 +18,67 @@ pub enum OutputStatus {
     Error,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticSeverity {
+    Notice,
+    Warning,
+    Error,
+}
+
+impl DiagnosticSeverity {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Notice => "NOTICE",
+            Self::Warning => "WARN",
+            Self::Error => "ERROR",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiagnosticRecord {
+    pub source: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub severity: DiagnosticSeverity,
+}
+
+impl DiagnosticRecord {
+    pub fn new(
+        source: impl Into<String>,
+        summary: impl Into<String>,
+        detail: Option<String>,
+        severity: DiagnosticSeverity,
+    ) -> Self {
+        Self {
+            source: source.into(),
+            summary: summary.into(),
+            detail,
+            severity,
+        }
+    }
+
+    pub fn display_line(&self) -> String {
+        match &self.detail {
+            Some(detail) if !detail.is_empty() => format!(
+                "[{}] {}: {} ({})",
+                self.severity.label(),
+                self.source,
+                self.summary,
+                detail
+            ),
+            _ => format!(
+                "[{}] {}: {}",
+                self.severity.label(),
+                self.source,
+                self.summary
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct OutputError {
     pub message: String,
@@ -69,6 +130,8 @@ pub struct ReplayArtifactFile {
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -113,6 +176,70 @@ impl PluginIncidentReport {
             self.core_debugger_status
         )
     }
+}
+
+pub fn collect_runtime_diagnostics(
+    source_map_loaded: bool,
+    budget: &crate::inspector::budget::BudgetInfo,
+    last_error: Option<&str>,
+) -> Vec<DiagnosticRecord> {
+    let mut diagnostics = Vec::new();
+
+    if !source_map_loaded {
+        diagnostics.push(DiagnosticRecord::new(
+            "source_map",
+            "Source locations are degraded for this session.",
+            Some(
+                "DWARF/source map data could not be loaded, so paused file and line hints may be unavailable."
+                    .to_string(),
+            ),
+            DiagnosticSeverity::Warning,
+        ));
+    }
+
+    for (resource, percentage) in [
+        ("CPU", budget.cpu_percentage()),
+        ("Memory", budget.memory_percentage()),
+    ] {
+        let severity = if percentage >= 90.0 {
+            Some(DiagnosticSeverity::Warning)
+        } else if percentage >= 70.0 {
+            Some(DiagnosticSeverity::Notice)
+        } else {
+            None
+        };
+
+        if let Some(severity) = severity {
+            let detail = if percentage >= 90.0 {
+                Some(format!(
+                    "{} usage is at {:.1}% of the configured limit. Consider reducing contract work or data size.",
+                    resource, percentage
+                ))
+            } else {
+                Some(format!(
+                    "{} usage is at {:.1}% of the configured limit.",
+                    resource, percentage
+                ))
+            };
+            diagnostics.push(DiagnosticRecord::new(
+                format!("budget/{}", resource.to_lowercase()),
+                format!("{} budget is running high.", resource),
+                detail,
+                severity,
+            ));
+        }
+    }
+
+    if let Some(error) = last_error.filter(|error| !error.trim().is_empty()) {
+        diagnostics.push(DiagnosticRecord::new(
+            "execution",
+            "The most recent debugger action failed.",
+            Some(error.to_string()),
+            DiagnosticSeverity::Error,
+        ));
+    }
+
+    diagnostics
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -44,6 +44,11 @@
         "command": "soroban-debugger.openDocs",
         "title": "Quick-Open Documentation",
         "category": "Soroban"
+      },
+      {
+        "command": "soroban-debugger.importTrace",
+        "title": "Import Execution Trace",
+        "category": "Soroban"
       }
     ],
     "viewsContainers": {
@@ -60,6 +65,11 @@
         {
           "id": "soroban-debugger.eventsView",
           "name": "Contract Events",
+          "contextualTitle": "Soroban"
+        },
+        {
+          "id": "soroban-debugger.traceView",
+          "name": "Execution Trace",
           "contextualTitle": "Soroban"
         }
       ]
@@ -91,6 +101,11 @@
           "type": "boolean",
           "default": false,
           "description": "Enable opt-in telemetry for launch failures, handshake errors, and adapter crashes. No contract data or secrets are collected."
+        },
+        "soroban-debugger.preflight.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run preflight diagnostics before launching a debug session."
         }
       }
     },

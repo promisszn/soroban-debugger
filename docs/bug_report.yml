@@ -1,0 +1,50 @@
+name: Bug Report
+description: Report a bug, crash, or unexpected behavior in the CLI or VS Code extension
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting an issue! Please provide as much context as possible.
+  - type: textarea
+    id: current_behavior
+    attributes:
+      label: Current Behavior
+      description: What is the bug? What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: desired_outcome
+    attributes:
+      label: Expected Behavior (Desired Outcome)
+      description: What did you expect to happen instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce the issue? (e.g., CLI command, launch.json, contract code)
+      placeholder: |
+        1. Run `soroban-debug ...`
+        2. See error ...
+    validations:
+      required: true
+  - type: textarea
+    id: files_involved
+    attributes:
+      label: Files Likely Involved
+      description: If you know the codebase, where do you suspect the bug is?
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Details
+      description: OS, version of `soroban-debug`, VS Code version, Rust version, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: manual_verification
+    attributes:
+      label: Manual Verification Notes
+      description: How can a reviewer verify the bug is fixed?

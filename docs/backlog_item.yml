@@ -1,0 +1,50 @@
+name: Backlog Item
+description: Propose a larger architectural change, process update, or epic-level item
+title: "[Backlog]: "
+labels: ["backlog"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for larger refactors, documentation overhauls, or process improvements.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal / Context
+      description: What is the context or problem area for this backlog item?
+    validations:
+      required: true
+  - type: textarea
+    id: current_behavior
+    attributes:
+      label: Current State
+      description: What is the current state of the repository regarding this item?
+    validations:
+      required: true
+  - type: textarea
+    id: desired_outcome
+    attributes:
+      label: Desired Outcome
+      description: What does "done" look like?
+    validations:
+      required: true
+  - type: textarea
+    id: files_involved
+    attributes:
+      label: Scope / Files to Touch
+      description: Which areas, directories, or files need to be modified or created?
+    validations:
+      required: true
+  - type: checkboxes
+    id: docs_impact
+    attributes:
+      label: Documentation Impact
+      description: Does this affect public documentation or contributor guides?
+      options:
+        - label: Yes
+        - label: No
+  - type: textarea
+    id: manual_verification
+    attributes:
+      label: Verification / Rollout Notes
+      description: Are there any special steps needed to roll this out or verify its success?

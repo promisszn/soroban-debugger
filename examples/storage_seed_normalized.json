@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0.0",
+  "entries": {
+    "balance:admin": "1000000000",
+    "balance:user_a": "500",
+    "balance:user_b": "250",
+    "config:fee_rate": "10",
+    "config:paused": "false"
+  }
+}

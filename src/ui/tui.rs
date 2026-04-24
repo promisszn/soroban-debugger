@@ -1,4 +1,5 @@
 use crate::debugger::engine::DebuggerEngine;
+use crate::inspector::{StorageInspector, storage::StorageQuery};
 use crate::inspector::BudgetInspector;
 use crate::Result;
 use std::io::{self, Write};
@@ -9,9 +10,29 @@ struct PendingExecution {
     args: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct StorageDisplayOptions {
+    filter: Option<String>,
+    jump_to: Option<String>,
+    page: usize,
+    page_size: usize,
+}
+
+impl Default for StorageDisplayOptions {
+    fn default() -> Self {
+        Self {
+            filter: None,
+            jump_to: None,
+            page: 1,
+            page_size: 25,
+        }
+    }
+}
+
 /// Terminal user interface for interactive debugging.
 pub struct DebuggerUI {
     engine: DebuggerEngine,
+    config: crate::config::Config,
     pending_execution: Option<PendingExecution>,
     last_output: Option<String>,
     last_error: Option<String>,
@@ -21,6 +42,7 @@ impl DebuggerUI {
     pub fn new(engine: DebuggerEngine) -> Result<Self> {
         Ok(Self {
             engine,
+            config: crate::config::Config::load_or_default(),
             pending_execution: None,
             last_output: None,
             last_error: None,
@@ -86,14 +108,17 @@ impl DebuggerUI {
             return Ok(false);
         }
 
-        match parts[0] {
-            "s" | "step" => {
+        let cmd = parts[0];
+        let kb = &self.config.keybindings;
+
+        match cmd {
+            c if c == kb.step || c == "step" => {
                 self.engine.step()?;
                 if let Ok(state) = self.engine.state().lock() {
                     crate::logging::log_step(state.step_count() as u64);
                 }
             }
-            "c" | "continue" => {
+            c if c == kb.continue_exec || c == "continue" => {
                 if let Some(pending) = self.pending_execution.take() {
                     match self
                         .engine
@@ -121,7 +146,7 @@ impl DebuggerUI {
                     tracing::info!("Execution continuing");
                 }
             }
-            "i" | "inspect" => {
+            c if c == kb.inspect || c == "inspect" => {
                 self.inspect();
             }
             "run" => {
@@ -153,7 +178,8 @@ impl DebuggerUI {
                 }
             }
             "storage" => {
-                self.display_storage()?;
+                let options = Self::parse_storage_display_options(&parts[1..])?;
+                self.display_storage(&options)?;
             }
             "stack" => {
                 if let Ok(state) = self.engine.state().lock() {
@@ -164,6 +190,9 @@ impl DebuggerUI {
             }
             "budget" => {
                 BudgetInspector::display(self.engine.executor().host());
+            }
+            "diag" | "diagnostics" => {
+                self.display_diagnostics();
             }
             "break" => {
                 if parts.len() < 2 {
@@ -204,11 +233,11 @@ impl DebuggerUI {
                 }
             }
             "help" => self.print_help(),
-            "q" | "quit" | "exit" => {
+            c if c == kb.quit || c == "quit" || c == "exit" => {
                 tracing::info!("Exiting debugger");
                 return Ok(true);
             }
-            _ => tracing::warn!(command = parts[0], "Unknown command"),
+            _ => tracing::warn!(command = cmd, "Unknown command"),
         }
 
         Ok(false)
@@ -257,7 +286,7 @@ impl DebuggerUI {
         }
     }
 
-    fn display_storage(&self) -> Result<()> {
+    fn display_storage(&self, options: &StorageDisplayOptions) -> Result<()> {
         let entries = self.engine.executor().get_storage_snapshot()?;
 
         if entries.is_empty() {
@@ -265,16 +294,60 @@ impl DebuggerUI {
             return Ok(());
         }
 
+        let sorted_entries = StorageInspector::sorted_entries_from_map(&entries);
+        let query = StorageQuery {
+            filter: options.filter.clone(),
+            jump_to: options.jump_to.clone(),
+            page: options.page.saturating_sub(1),
+            page_size: options.page_size,
+        };
+        let page = StorageInspector::build_page(&sorted_entries, &query);
+
         crate::logging::log_display("", crate::logging::LogLevel::Info);
         crate::logging::log_display("=== Contract Storage ===", crate::logging::LogLevel::Info);
+        crate::logging::log_display(
+            format!(
+                "Page {}/{}  showing {} of {} filtered entries ({} total)",
+                page.page + 1,
+                page.total_pages,
+                page.entries.len(),
+                page.filtered_entries,
+                page.total_entries
+            ),
+            crate::logging::LogLevel::Info,
+        );
+        if let Some(filter) = query.normalized_filter() {
+            crate::logging::log_display(
+                format!("Filter: {}", filter),
+                crate::logging::LogLevel::Info,
+            );
+        }
+        if let Some(jump) = query.normalized_jump() {
+            let jump_status = if let Some(index) = page.jump_match_index {
+                format!("Jump target: {} (matched entry #{})", jump, index + 1)
+            } else {
+                format!("Jump target: {} (no match found)", jump)
+            };
+            crate::logging::log_display(jump_status, crate::logging::LogLevel::Info);
+        }
         crate::logging::log_display("", crate::logging::LogLevel::Info);
 
-        let mut items: Vec<_> = entries.iter().collect();
-        items.sort_by_key(|(ka, _)| *ka);
-
-        for (key, value) in items {
+        if page.entries.is_empty() {
             crate::logging::log_display(
-                format!("  {}: {}", key, value),
+                "No storage entries matched the current view",
+                crate::logging::LogLevel::Info,
+            );
+        }
+
+        for (offset, (key, value)) in page.entries.iter().enumerate() {
+            let absolute_index = page.page_start + offset + 1;
+            let prefix = if page.jump_match_index == Some(page.page_start + offset) {
+                ">"
+            } else {
+                " "
+            };
+            crate::logging::log_display(
+                format!("{} {:>4}. {}: {}", prefix, absolute_index, key, value),
                 crate::logging::LogLevel::Info,
             );
         }
@@ -283,21 +356,54 @@ impl DebuggerUI {
         Ok(())
     }
 
+    fn display_diagnostics(&self) {
+        let budget = BudgetInspector::get_cpu_usage(self.engine.executor().host());
+        let diagnostics = crate::output::collect_runtime_diagnostics(
+            self.engine.source_map().is_some(),
+            &budget,
+            self.last_error(),
+        );
+
+        if diagnostics.is_empty() {
+            crate::logging::log_display("No active diagnostics", crate::logging::LogLevel::Info);
+            return;
+        }
+
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+        crate::logging::log_display("=== Diagnostics ===", crate::logging::LogLevel::Info);
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+
+        for diagnostic in diagnostics {
+            crate::logging::log_display(
+                diagnostic.display_line(),
+                match diagnostic.severity {
+                    crate::output::DiagnosticSeverity::Notice => crate::logging::LogLevel::Info,
+                    crate::output::DiagnosticSeverity::Warning => crate::logging::LogLevel::Warn,
+                    crate::output::DiagnosticSeverity::Error => crate::logging::LogLevel::Error,
+                },
+            );
+        }
+
+        crate::logging::log_display("", crate::logging::LogLevel::Info);
+    }
+
     fn print_help(&self) {
+        let kb = &self.config.keybindings;
+        
         crate::logging::log_display(
             "Interactive debugger commands:",
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
-            "  step | s           Step execution",
+            format!("  step | {:<11} Step execution", kb.step),
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
-            "  continue | c       Continue execution",
+            format!("  continue | {:<7} Continue execution", kb.continue_exec),
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
-            "  inspect | i        Show current state",
+            format!("  inspect | {:<8} Show current state", kb.inspect),
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
@@ -305,7 +411,7 @@ impl DebuggerUI {
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
-            "  storage            Show current contract storage",
+            "  storage [query] [--page N] [--page-size N] [--jump KEY]",
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
@@ -314,6 +420,10 @@ impl DebuggerUI {
         );
         crate::logging::log_display(
             "  budget             Show budget usage",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  diagnostics | diag Show active diagnostics",
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
@@ -333,7 +443,7 @@ impl DebuggerUI {
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
-            "  quit | q           Exit debugger",
+            format!("  quit | {:<11} Exit debugger", kb.quit),
             crate::logging::LogLevel::Info,
         );
     }

@@ -65,6 +65,14 @@ pub enum SymbolicProfile {
     Deep,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum SnapshotCompression {
+    #[default]
+    None,
+    Gzip,
+    Zstd,
+}
+
 impl Verbosity {
     /// Convert verbosity to log level string for RUST_LOG
     pub fn to_log_level(self) -> String {
@@ -366,6 +374,10 @@ pub struct RunArgs {
     /// Export storage state to JSON file after execution
     #[arg(long)]
     pub export_storage: Option<PathBuf>,
+
+    /// Compression format for exported storage snapshots
+    #[arg(long, value_enum, default_value_t = SnapshotCompression::None)]
+    pub export_compression: SnapshotCompression,
 
     /// Import storage state from JSON file before execution
     #[arg(long)]

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use soroban_env_host::budget::AsBudget;
 use soroban_env_host::xdr::{LedgerEntryData, LedgerKey};
 use soroban_env_host::Host;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 
@@ -21,19 +21,35 @@ pub enum FilterPattern {
 }
 
 /// Storage state snapshot for import/export
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageState {
-    pub entries: HashMap<String, String>,
+    #[serde(default = "default_schema_version")]
+    pub schema_version: String,
+    pub entries: BTreeMap<String, String>,
+}
+
+fn default_schema_version() -> String {
+    "1.0.0".to_string()
+}
+
+impl Default for StorageState {
+    fn default() -> Self {
+        Self {
+            schema_version: default_schema_version(),
+            entries: BTreeMap::new(),
+        }
+    }
 }
 
 impl StorageState {
-    /// Export storage state to JSON file
+    /// Export storage state to JSON file with normalized ordering
     pub fn export_to_file<P: AsRef<Path>>(
         entries: &HashMap<String, String>,
         path: P,
     ) -> Result<()> {
         let state = StorageState {
-            entries: entries.clone(),
+            schema_version: default_schema_version(),
+            entries: entries.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         };
         let json = serde_json::to_string_pretty(&state).map_err(|e| {
             DebuggerError::StorageError(format!("Failed to serialize storage state: {}", e))
@@ -60,7 +76,7 @@ impl StorageState {
         let state: StorageState = serde_json::from_str(&contents).map_err(|e| {
             DebuggerError::StorageError(format!("Failed to parse storage JSON: {}", e))
         })?;
-        Ok(state.entries)
+        Ok(state.entries.into_iter().collect())
     }
 }
 
@@ -98,6 +114,26 @@ pub struct StorageFilter {
     patterns: Vec<FilterPattern>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StorageQuery {
+    pub filter: Option<String>,
+    pub jump_to: Option<String>,
+    pub page: usize,
+    pub page_size: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoragePage {
+    pub total_entries: usize,
+    pub filtered_entries: usize,
+    pub page: usize,
+    pub total_pages: usize,
+    pub page_size: usize,
+    pub page_start: usize,
+    pub jump_match_index: Option<usize>,
+    pub entries: Vec<(String, String)>,
+}
+
 impl StorageFilter {
     /// Create a new storage filter from a list of pattern strings
     pub fn new(patterns: &[String]) -> std::result::Result<Self, String> {
@@ -131,6 +167,23 @@ impl StorageFilter {
             })
             .collect::<Vec<_>>()
             .join(", ")
+    }
+}
+
+impl StorageQuery {
+    pub fn normalized_filter(&self) -> Option<&str> {
+        self.filter.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    }
+
+    pub fn normalized_jump(&self) -> Option<&str> {
+        self.jump_to
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    pub fn page_size_or_default(&self) -> usize {
+        self.page_size.max(1)
     }
 }
 
@@ -170,6 +223,104 @@ impl StorageInspector {
     /// Get a specific storage value
     pub fn get(&self, key: &str) -> Option<&String> {
         self.storage.get(key)
+    }
+
+    pub fn sorted_entries(&self) -> Vec<(String, String)> {
+        Self::sorted_entries_from_map(&self.storage)
+    }
+
+    pub fn sorted_entries_from_map(entries: &HashMap<String, String>) -> Vec<(String, String)> {
+        let mut items: Vec<(String, String)> = entries
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        items.sort_by(|a, b| a.0.cmp(&b.0));
+        items
+    }
+
+    pub fn build_page(entries: &[(String, String)], query: &StorageQuery) -> StoragePage {
+        let filtered_entries = Self::filter_entries(entries, query.normalized_filter());
+        let filtered_len = filtered_entries.len();
+        let page_size = query.page_size_or_default();
+        let total_pages = filtered_len.max(1).div_ceil(page_size);
+        let jump_match_index =
+            query.normalized_jump().and_then(|jump| Self::find_jump_index(&filtered_entries, jump));
+        let page = jump_match_index
+            .map(|idx| idx / page_size)
+            .unwrap_or(query.page.min(total_pages.saturating_sub(1)));
+        let page_start = page * page_size;
+        let page_entries = filtered_entries
+            .into_iter()
+            .skip(page_start)
+            .take(page_size)
+            .collect();
+
+        StoragePage {
+            total_entries: entries.len(),
+            filtered_entries: filtered_len,
+            page,
+            total_pages,
+            page_size,
+            page_start,
+            jump_match_index,
+            entries: page_entries,
+        }
+    }
+
+    pub fn filter_entries(
+        entries: &[(String, String)],
+        filter: Option<&str>,
+    ) -> Vec<(String, String)> {
+        let Some(filter) = filter else {
+            return entries.to_vec();
+        };
+
+        entries
+            .iter()
+            .filter(|(key, value)| Self::matches_filter(key, value, filter))
+            .cloned()
+            .collect()
+    }
+
+    pub fn matches_filter(key: &str, value: &str, filter: &str) -> bool {
+        let filter = filter.trim();
+        if filter.is_empty() {
+            return true;
+        }
+
+        if Self::is_pattern_filter(filter) {
+            return StorageFilter::new(&[filter.to_string()])
+                .map(|compiled| compiled.matches(key))
+                .unwrap_or(false);
+        }
+
+        let needle = filter.to_lowercase();
+        key.to_lowercase().contains(&needle) || value.to_lowercase().contains(&needle)
+    }
+
+    pub fn find_jump_index(entries: &[(String, String)], jump: &str) -> Option<usize> {
+        let needle = jump.trim().to_lowercase();
+        if needle.is_empty() {
+            return None;
+        }
+
+        entries
+            .iter()
+            .position(|(key, _)| key.to_lowercase().starts_with(&needle))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .position(|(key, _)| key.to_lowercase().contains(&needle))
+            })
+            .or_else(|| {
+                entries
+                    .iter()
+                    .position(|(key, _)| key.to_lowercase() >= needle)
+            })
+    }
+
+    fn is_pattern_filter(filter: &str) -> bool {
+        filter.starts_with("re:") || filter.ends_with('*')
     }
 
     /// Display storage in a readable format (no filtering)
@@ -712,6 +863,55 @@ mod tests {
         let filtered = inspector.get_filtered(&filter);
 
         assert_eq!(filtered.len(), 0);
+    }
+
+    #[test]
+    fn test_build_page_with_substring_filter() {
+        let mut inspector = StorageInspector::new();
+        inspector.set("user:alice", "100");
+        inspector.set("user:bob", "250");
+        inspector.set("config:admin", "alice");
+
+        let entries = inspector.sorted_entries();
+        let page = StorageInspector::build_page(
+            &entries,
+            &StorageQuery {
+                filter: Some("alice".to_string()),
+                jump_to: None,
+                page: 0,
+                page_size: 10,
+            },
+        );
+
+        assert_eq!(page.total_entries, 3);
+        assert_eq!(page.filtered_entries, 2);
+        assert_eq!(page.entries.len(), 2);
+        assert_eq!(page.entries[0].0, "config:admin");
+        assert_eq!(page.entries[1].0, "user:alice");
+    }
+
+    #[test]
+    fn test_build_page_honors_jump_target() {
+        let mut inspector = StorageInspector::new();
+        for i in 0..12 {
+            inspector.set(format!("key_{:02}", i), format!("value_{i}"));
+        }
+
+        let entries = inspector.sorted_entries();
+        let page = StorageInspector::build_page(
+            &entries,
+            &StorageQuery {
+                filter: None,
+                jump_to: Some("key_09".to_string()),
+                page: 0,
+                page_size: 5,
+            },
+        );
+
+        assert_eq!(page.page, 1);
+        assert_eq!(page.page_start, 5);
+        assert_eq!(page.jump_match_index, Some(9));
+        assert!(page.entries.iter().any(|(key, _)| key == "key_09"));
     }
 
     #[test]

@@ -1,0 +1,48 @@
+name: Feature Request
+description: Suggest an idea for the Soroban Debugger or VS Code extension
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to suggest a feature! Please fill out the sections below.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What is the underlying problem or use case you are trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: current_behavior
+    attributes:
+      label: Current Behavior
+      description: What happens currently? (Or what is currently missing?)
+    validations:
+      required: true
+  - type: textarea
+    id: desired_outcome
+    attributes:
+      label: Desired Outcome
+      description: How should the feature work? What does success look like?
+    validations:
+      required: true
+  - type: textarea
+    id: files_involved
+    attributes:
+      label: Files Likely Involved
+      description: If you know the codebase, which files or components will this touch?
+  - type: checkboxes
+    id: docs_impact
+    attributes:
+      label: Documentation Impact
+      description: Will this feature require documentation updates?
+      options:
+        - label: Yes, this adds a new flag, command, or extension setting.
+        - label: No, this is an internal change or minor tweak.
+  - type: textarea
+    id: manual_verification
+    attributes:
+      label: Manual Verification Notes
+      description: How could a reviewer or maintainer manually test this feature once implemented?
