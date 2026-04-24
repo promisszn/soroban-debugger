@@ -284,6 +284,14 @@ impl ReplSession {
                 self.executor.display_functions()?;
                 Ok(false)
             }
+            ReplCommand::Palette => {
+                tracing::info!("{}", Formatter::info("Command palette opened. Type an action to run:"));
+                tracing::info!("  export-trace");
+                tracing::info!("  add-breakpoint");
+                tracing::info!("  diagnostics");
+                tracing::info!("  export-storage");
+                Ok(false)
+            }
         }
     }
 
@@ -335,6 +343,10 @@ impl ReplSession {
         tracing::info!(
             "  {}                 Show available contract functions",
             Formatter::info("functions")
+        );
+        tracing::info!(
+            "  {}                   Open the command palette",
+            Formatter::info("palette")
         );
         tracing::info!(
             "  {}                     Exit the REPL",

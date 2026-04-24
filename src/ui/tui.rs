@@ -203,6 +203,9 @@ impl DebuggerUI {
                     tracing::debug!(breakpoint = parts[1], "No breakpoint found at function");
                 }
             }
+            "palette" => {
+                self.show_palette()?;
+            }
             "help" => self.print_help(),
             "q" | "quit" | "exit" => {
                 tracing::info!("Exiting debugger");
@@ -255,6 +258,17 @@ impl DebuggerUI {
         } else {
             crate::logging::log_display("State unavailable", crate::logging::LogLevel::Info);
         }
+    }
+
+    fn show_palette(&self) -> Result<()> {
+        crate::logging::log_display("\n=== Command Palette ===", crate::logging::LogLevel::Info);
+        crate::logging::log_display("  export-trace      Export current execution trace", crate::logging::LogLevel::Info);
+        crate::logging::log_display("  add-breakpoint    Add a new breakpoint", crate::logging::LogLevel::Info);
+        crate::logging::log_display("  diagnostics       Open diagnostics view", crate::logging::LogLevel::Info);
+        crate::logging::log_display("  change-view       Change TUI view", crate::logging::LogLevel::Info);
+        crate::logging::log_display("  export-storage    Export current storage state", crate::logging::LogLevel::Info);
+        crate::logging::log_display("\nType a command or press Enter to cancel.", crate::logging::LogLevel::Info);
+        Ok(())
     }
 
     fn display_storage(&self) -> Result<()> {
@@ -326,6 +340,10 @@ impl DebuggerUI {
         );
         crate::logging::log_display(
             "  clear <func>       Clear breakpoint",
+            crate::logging::LogLevel::Info,
+        );
+        crate::logging::log_display(
+            "  palette            Open command palette",
             crate::logging::LogLevel::Info,
         );
         crate::logging::log_display(
