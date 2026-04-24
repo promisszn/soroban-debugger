@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use soroban_env_host::budget::AsBudget;
 use soroban_env_host::xdr::{LedgerEntryData, LedgerKey};
 use soroban_env_host::Host;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 
@@ -21,19 +21,35 @@ pub enum FilterPattern {
 }
 
 /// Storage state snapshot for import/export
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageState {
-    pub entries: HashMap<String, String>,
+    #[serde(default = "default_schema_version")]
+    pub schema_version: String,
+    pub entries: BTreeMap<String, String>,
+}
+
+fn default_schema_version() -> String {
+    "1.0.0".to_string()
+}
+
+impl Default for StorageState {
+    fn default() -> Self {
+        Self {
+            schema_version: default_schema_version(),
+            entries: BTreeMap::new(),
+        }
+    }
 }
 
 impl StorageState {
-    /// Export storage state to JSON file
+    /// Export storage state to JSON file with normalized ordering
     pub fn export_to_file<P: AsRef<Path>>(
         entries: &HashMap<String, String>,
         path: P,
     ) -> Result<()> {
         let state = StorageState {
-            entries: entries.clone(),
+            schema_version: default_schema_version(),
+            entries: entries.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         };
         let json = serde_json::to_string_pretty(&state).map_err(|e| {
             DebuggerError::StorageError(format!("Failed to serialize storage state: {}", e))
@@ -60,7 +76,7 @@ impl StorageState {
         let state: StorageState = serde_json::from_str(&contents).map_err(|e| {
             DebuggerError::StorageError(format!("Failed to parse storage JSON: {}", e))
         })?;
-        Ok(state.entries)
+        Ok(state.entries.into_iter().collect())
     }
 }
 
