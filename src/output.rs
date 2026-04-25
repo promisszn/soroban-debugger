@@ -178,6 +178,44 @@ impl PluginIncidentReport {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginReloadOutcome {
+    Success,
+    Failed,
+    RolledBack,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct PluginReloadReport {
+    pub plugin: String,
+    pub timestamp: String,
+    pub outcome: PluginReloadOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preserved_state_bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl PluginReloadReport {
+    pub fn summary_line(&self) -> String {
+        match self.outcome {
+            PluginReloadOutcome::Success => {
+                let size = self.preserved_state_bytes.map_or("unknown".to_string(), |b| format!("{} bytes", b));
+                format!("Plugin '{}' reloaded successfully. Preserved state: {}.", self.plugin, size)
+            }
+            PluginReloadOutcome::Failed => {
+                let reason = self.reason.as_deref().unwrap_or("unknown error");
+                format!("Plugin '{}' reload failed: {}.", self.plugin, reason)
+            }
+            PluginReloadOutcome::RolledBack => {
+                let reason = self.reason.as_deref().unwrap_or("unknown error");
+                format!("Plugin '{}' reload rolled back. Reason: {}.", self.plugin, reason)
+            }
+        }
+    }
+}
+
 pub fn collect_runtime_diagnostics(
     source_map_loaded: bool,
     budget: &crate::inspector::budget::BudgetInfo,
